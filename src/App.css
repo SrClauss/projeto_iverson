@@ -18,7 +18,7 @@
   flex: 1;
 }
 
-button {
+button:not(.MuiButtonBase-root) {
   width: 100%;
   max-width: 700px;
   background-color: #2563eb;
@@ -31,7 +31,7 @@ button {
   transition: background-color 0.2s;
 }
 
-button:hover {
+button:not(.MuiButtonBase-root):hover {
   background-color: #1d4ed8;
 }
 
@@ -97,8 +97,8 @@ h1 {
   text-align: center;
 }
 
-input,
-button {
+input:not(.MuiInputBase-input),
+button:not(.MuiButtonBase-root) {
   border-radius: 8px;
   border: 1px solid transparent;
   padding: 0.6em 1.2em;
@@ -111,20 +111,20 @@ button {
   box-shadow: 0 2px 2px rgba(0, 0, 0, 0.2);
 }
 
-button {
+button:not(.MuiButtonBase-root) {
   cursor: pointer;
 }
 
-button:hover {
+button:not(.MuiButtonBase-root):hover {
   border-color: #396cd8;
 }
-button:active {
+button:not(.MuiButtonBase-root):active {
   border-color: #396cd8;
   background-color: #e8e8e8;
 }
 
-input,
-button {
+input:not(.MuiInputBase-input),
+button:not(.MuiButtonBase-root) {
   outline: none;
 }
 
@@ -142,12 +142,12 @@ button {
     color: #24c8db;
   }
 
-  input,
-  button {
+  input:not(.MuiInputBase-input),
+  button:not(.MuiButtonBase-root) {
     color: #ffffff;
     background-color: #0f0f0f98;
   }
-  button:active {
+  button:not(.MuiButtonBase-root):active {
     background-color: #0f0f0f69;
   }
 }

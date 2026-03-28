@@ -27,6 +27,9 @@ ctor = "0.6.3"
 reqwest = { version = "0.11", features = ["json"] }
 tokio = { version = "1", features = ["full"] }
 mongodb = "3.5.2"
+base64 = "0.22"
+quick-xml = "0.37"
+chrono = { version = "0.4", features = ["serde"] }
 
 
 

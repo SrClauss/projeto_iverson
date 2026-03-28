@@ -1,0 +1,88 @@
+<svg width="1600" height="900" viewBox="0 0 1600 900" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1600" y2="900" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F7E9ED"/>
+      <stop offset="0.5" stop-color="#F2E4EA"/>
+      <stop offset="1" stop-color="#ECE3E8"/>
+    </linearGradient>
+    <linearGradient id="bordeauxGlow" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#6E1028"/>
+      <stop offset="0.5" stop-color="#8C1D3B"/>
+      <stop offset="1" stop-color="#C57A8E"/>
+    </linearGradient>
+    <linearGradient id="wineDeep" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#4C0F22"/>
+      <stop offset="0.55" stop-color="#7B1733"/>
+      <stop offset="1" stop-color="#D9A6B5"/>
+    </linearGradient>
+    <filter id="blur40" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="20"/>
+    </filter>
+    <filter id="blur16" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="8"/>
+    </filter>
+  </defs>
+
+  <rect width="1600" height="900" fill="url(#bg)"/>
+
+  <g opacity="0.32" filter="url(#blur40)">
+    <ellipse cx="130" cy="115" rx="220" ry="220" fill="#C66B84"/>
+    <ellipse cx="1450" cy="790" rx="250" ry="230" fill="#6C1832"/>
+    <ellipse cx="1100" cy="260" rx="260" ry="220" fill="#A33857"/>
+    <ellipse cx="920" cy="650" rx="230" ry="220" fill="#511427"/>
+  </g>
+
+  <path d="M220 0C175 170 235 248 338 305C444 363 519 420 507 533" stroke="#E4B1BF" stroke-opacity="0.48" stroke-width="2" fill="none"/>
+  <path d="M0 595C173 484 296 446 456 481C555 503 648 567 700 675" stroke="#EBC9D4" stroke-opacity="0.5" stroke-width="2" fill="none"/>
+  <path d="M1013 0C1064 93 1164 125 1273 171C1388 218 1498 302 1452 390" stroke="#F1DCE3" stroke-opacity="0.55" stroke-width="2" fill="none"/>
+  <path d="M1305 466C1265 556 1326 622 1400 681C1466 734 1512 789 1498 855" stroke="#F7EDF1" stroke-opacity="0.75" stroke-width="2" fill="none"/>
+
+  <g opacity="0.82">
+    <g transform="translate(218 94) rotate(14 110 110)">
+      <rect x="0" y="0" width="220" height="220" rx="46" fill="url(#bordeauxGlow)" fill-opacity="0.5"/>
+      <rect x="22" y="18" width="220" height="220" rx="46" fill="#9B2847" fill-opacity="0.16" stroke="rgba(255,255,255,0.38)"/>
+    </g>
+
+    <g transform="translate(875 76) rotate(22 100 130)">
+      <rect x="0" y="26" width="210" height="250" rx="48" fill="url(#wineDeep)" fill-opacity="0.58"/>
+      <rect x="14" y="0" width="190" height="218" rx="40" fill="#65132B" fill-opacity="0.2"/>
+    </g>
+
+    <g transform="translate(1280 128) rotate(8 70 70)">
+      <rect x="0" y="0" width="140" height="140" rx="34" fill="url(#bordeauxGlow)" fill-opacity="0.6"/>
+      <rect x="15" y="-10" width="110" height="96" rx="24" fill="#D19AAA" fill-opacity="0.18"/>
+    </g>
+
+    <g transform="translate(24 540) rotate(-28 96 96)">
+      <rect x="0" y="0" width="192" height="192" rx="42" fill="url(#bordeauxGlow)" fill-opacity="0.56"/>
+      <rect x="25" y="12" width="150" height="150" rx="34" fill="#7A1A35" fill-opacity="0.18"/>
+    </g>
+
+    <g transform="translate(380 646) rotate(-2 100 95)">
+      <rect x="0" y="0" width="220" height="190" rx="44" fill="url(#bordeauxGlow)" fill-opacity="0.6"/>
+      <rect x="170" y="18" width="135" height="230" rx="40" fill="#D5A4B2" fill-opacity="0.22"/>
+    </g>
+
+    <g transform="translate(650 284) rotate(18 120 120)">
+      <rect x="0" y="0" width="240" height="240" rx="54" fill="url(#bordeauxGlow)" fill-opacity="0.6"/>
+      <ellipse cx="140" cy="95" rx="55" ry="120" fill="#F0D6DE" fill-opacity="0.16"/>
+    </g>
+
+    <g transform="translate(842 474) rotate(-30 156 140)">
+      <rect x="0" y="0" width="312" height="280" rx="90" fill="url(#wineDeep)" fill-opacity="0.7"/>
+      <rect x="28" y="35" width="250" height="250" rx="82" fill="#3E0E1D" fill-opacity="0.14"/>
+    </g>
+
+    <g transform="translate(1302 600) rotate(-12 120 120)">
+      <rect x="0" y="0" width="240" height="240" rx="50" fill="url(#bordeauxGlow)" fill-opacity="0.6"/>
+      <rect x="30" y="40" width="170" height="170" rx="38" fill="#DBB0BC" fill-opacity="0.18"/>
+    </g>
+  </g>
+
+  <g filter="url(#blur16)">
+    <ellipse cx="893" cy="338" rx="42" ry="98" fill="#7A1732" fill-opacity="0.36"/>
+    <ellipse cx="255" cy="225" rx="42" ry="92" fill="#D08C9E" fill-opacity="0.24"/>
+  </g>
+
+  <path d="M1515 790L1528 798L1541 790L1533 803L1541 816L1528 808L1515 816L1523 803L1515 790Z" fill="#FFF9FB" fill-opacity="0.95"/>
+</svg>
