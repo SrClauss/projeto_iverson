@@ -3,6 +3,7 @@ use crate::db;
 use crate::gemini_client;
 use crate::gmail_client::{self, GmailClient};
 use mongodb::bson::oid::ObjectId;
+use notify_rust::Notification;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -782,6 +783,20 @@ async fn aplicar_valor_frete_pago(
         }
     }
 
+    let mut divergencia_detectada = false;
+    let mut proposta_nominal = 0;
+
+    for proposta in &orcamento.propostas {
+        if proposta.id.as_deref() == Some(&ganhadora_id) {
+            proposta_nominal = proposta.valor_proposta;
+            break;
+        }
+    }
+
+    if proposta_nominal > 0 && proposta_nominal != valor_centavos {
+        divergencia_detectada = true;
+    }
+
     database
         .orcamentos
         .replace_one(
@@ -790,6 +805,23 @@ async fn aplicar_valor_frete_pago(
         )
         .await
         .map_err(|e| format!("Erro ao atualizar frete pago: {}", e))?;
+
+    if divergencia_detectada {
+        let title = "Divergência de Nota";
+        let body = format!(
+            "Orçamento '{}' - frete pago R$ {:.2} vs proposta R$ {:.2}",
+            orcamento.descricao,
+            valor_centavos as f64 / 100.0,
+            proposta_nominal as f64 / 100.0
+        );
+
+        let _ = Notification::new()
+            .summary(title)
+            .body(&body)
+            .show();
+
+        println!("[EmailWatcher] Aviso divergência: {}", body);
+    }
 
     Ok(Some((orcamento_id, orcamento.descricao.clone())))
 }

@@ -819,6 +819,25 @@ async fn get_dashboard_alertas(limit: u32) -> Result<Vec<DashboardAlertaItem>, S
 }
 
 #[tauri::command]
+fn set_tray_divergencias(app: tauri::AppHandle, count: u32) -> Result<String, String> {
+    let title = if count == 0 {
+        "iverson-app".to_string()
+    } else {
+        format!("Divergências: {}", count)
+    };
+
+    if let Err(e) = app.tray_handle().set_title(Some(&title)) {
+        eprintln!("[Tray] Falha ao atualizar título do tray: {}", e);
+    }
+
+    if let Err(e) = app.tray_handle().set_tooltip(Some(format!("{} divergências", count))) {
+        eprintln!("[Tray] Falha ao atualizar tooltip do tray: {}", e);
+    }
+
+    Ok("ok".to_string())
+}
+
+#[tauri::command]
 async fn add_orcamento(mut orcamento: db::models::Orcamento) -> Result<String, String> {
     let database = db::get_database().await?;  
     orcamento.id = None;
@@ -1743,7 +1762,8 @@ pub fn run() {
             get_emails_pendentes,
             associar_email_a_orcamento,
             descartar_email,
-            excluir_email
+            excluir_email,
+            set_tray_divergencias
         ])
         .setup(|app| {
             // Watcher state management

@@ -273,6 +273,8 @@ const App = () => {
       setAlertas(alertasData);
       setTransportadoras(transportadorasData);
       setFiltroAtivoLabel(null);
+
+      await invoke('set_tray_divergencias', { count: alertasData.length });
     } catch (err) {
       setError(String(err));
       console.error('Erro ao carregar dashboard:', err);
