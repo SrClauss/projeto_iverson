@@ -29,6 +29,9 @@ import {
   OutlinedInput,
   Switch,
   FormControlLabel,
+  Badge,
+  Popover,
+  Divider,
 } from '@mui/material';
 import {
   Email,
@@ -47,13 +50,17 @@ import {
   CheckCircle,
   Delete,
   Close,
+  AccountCircle,
+  TrendingUp,
+  ArrowBack,
+  Warning as WarningAmberIcon,
 } from '@mui/icons-material';
 import { invoke } from '@tauri-apps/api/core';
 import glassBackground from './assets/glass-background-bordeaux.svg';
 import './App.css';
 
 type FilterKey = 'descricao' | 'valor' | 'data_criacao' | 'transportadora';
-type AppView = 'dashboard' | 'transportadoras' | 'orcamentos' | 'relatorios';
+type AppView = 'dashboard' | 'transportadoras' | 'orcamentos' | 'relatorios' | 'divergencia';
 
 // ============ Tipos TypeScript ============
 type DashboardStats = {
@@ -74,9 +81,20 @@ type OrcamentoRecenteItem = {
 
 type DashboardAlertaItem = {
   id: string;
+  orcamento_id: string;
   transportadora: string;
+  transportadora_id: string | null;
   msg: string;
   severity: 'error' | 'info' | 'warning';
+};
+
+type TransportadoraMetricas = {
+  total_transacoes: number;
+  transacoes_com_divergencia: number;
+  taxa_divergencia_pct: number;
+  valor_medio_proposta: number;
+  valor_medio_frete_pago: number;
+  divergencia_media: number;
 };
 
 type Transportadora = {
@@ -231,6 +249,14 @@ const App = () => {
   const [googleAuth, setGoogleAuth] = useState<GoogleAuthStatus | null>(null);
   const [googleAuthLoading, setGoogleAuthLoading] = useState(false);
 
+  // ── Notification State ──────────────────────────────────
+  const [notifAnchorEl, setNotifAnchorEl] = useState<HTMLElement | null>(null);
+
+  // ── Divergência State ───────────────────────────────────
+  const [divergenciaAtual, setDivergenciaAtual] = useState<DashboardAlertaItem | null>(null);
+  const [transportadoraMetricas, setTransportadoraMetricas] = useState<TransportadoraMetricas | null>(null);
+  const [metricasLoading, setMetricasLoading] = useState(false);
+
   // ── Email Watcher State ─────────────────────────────────
   const [watcherStatus, setWatcherStatus] = useState<WatcherStatus | null>(null);
   const [emailsPendentes, setEmailsPendentes] = useState<EmailPendente[]>([]);
@@ -266,7 +292,7 @@ const App = () => {
       const [statsData, orcamentosData, alertasData] = await Promise.all([
         invoke<DashboardStats>('get_dashboard_stats'),
         invoke<OrcamentoRecenteItem[]>('get_orcamentos_recentes', { limit: inactive ? 50 : 4, includeInactive: inactive }),
-        invoke<DashboardAlertaItem[]>('get_dashboard_alertas', { limit: 1 }),
+        invoke<DashboardAlertaItem[]>('get_dashboard_alertas', { limit: 20 }),
       ]);
 
       const transportadorasData = await invoke<Transportadora[]>('get_transportadoras');
@@ -286,9 +312,31 @@ const App = () => {
     }
   };
 
-  const handleResolverDivergencia = (id: string) => {
-    console.log('Resolver divergência:', id);
-    // TODO: Implementar resolução
+  const handleResolverDivergencia = async (alerta: DashboardAlertaItem) => {
+    setView('divergencia');
+    setDivergenciaAtual(alerta);
+    setNotifAnchorEl(null);
+    await loadOrcamentoDetalhe(alerta.orcamento_id);
+    if (alerta.transportadora_id) {
+      await loadTransportadoraMetricas(alerta.transportadora_id);
+    } else {
+      setTransportadoraMetricas(null);
+    }
+  };
+
+  const loadTransportadoraMetricas = async (transportadoraId: string) => {
+    setMetricasLoading(true);
+    try {
+      const metricas = await invoke<TransportadoraMetricas>('get_transportadora_metricas', {
+        transportadoraId,
+      });
+      setTransportadoraMetricas(metricas);
+    } catch (err) {
+      console.error('Erro ao carregar métricas da transportadora:', err);
+      setTransportadoraMetricas(null);
+    } finally {
+      setMetricasLoading(false);
+    }
   };
 
   // ── Google Auth Handlers ──────────────────────────────────
@@ -1073,7 +1121,9 @@ const App = () => {
                   ? 'Transportadoras'
                   : view === 'relatorios'
                     ? 'Relatórios'
-                    : 'Cadastro de Orçamentos'}{' '}
+                    : view === 'divergencia'
+                      ? 'Tratar Divergência'
+                      : 'Cadastro de Orçamentos'}{' '}
               <Chip
                 label="Live"
                 size="small"
@@ -1111,10 +1161,240 @@ const App = () => {
                   ? 'Gestão e cadastro de transportadoras'
                   : view === 'relatorios'
                     ? 'Em construção'
-                    : 'Cadastro de novos orçamentos no sistema'}
+                    : view === 'divergencia'
+                      ? 'Análise e resolução de divergências de nota'
+                      : 'Cadastro de novos orçamentos no sistema'}
             </Typography>
           </Box>
+
+          {/* Top-right: Notification Bell + Google Avatar */}
+          <Stack direction="row" spacing={1} alignItems="center">
+            <Tooltip title={`${stats?.divergencias_nota ?? 0} divergência(s) detectada(s)`} arrow>
+              <IconButton
+                onClick={(e) => setNotifAnchorEl(e.currentTarget)}
+                sx={{
+                  color: (stats?.divergencias_nota ?? 0) > 0 ? '#ef4444' : '#64748b',
+                  '&:hover': { bgcolor: 'rgba(239,68,68,0.08)' },
+                }}
+              >
+                <Badge badgeContent={stats?.divergencias_nota ?? 0} color="error" max={99}>
+                  <NotificationsActive />
+                </Badge>
+              </IconButton>
+            </Tooltip>
+
+            {googleAuth?.authenticated ? (
+              <Tooltip title={googleAuth.email || 'Conta Google conectada'} arrow>
+                <Avatar
+                  sx={{
+                    bgcolor: '#4285f4',
+                    width: 36,
+                    height: 36,
+                    fontSize: '0.95rem',
+                    fontWeight: 700,
+                    cursor: 'default',
+                    background: 'linear-gradient(135deg, #4285f4 0%, #34a853 100%)',
+                  }}
+                >
+                  {googleAuth.email ? googleAuth.email[0].toUpperCase() : 'G'}
+                </Avatar>
+              </Tooltip>
+            ) : (
+              <Tooltip title="Conta Google não conectada" arrow>
+                <Avatar sx={{ bgcolor: '#94a3b8', width: 36, height: 36 }}>
+                  <AccountCircle sx={{ fontSize: 22 }} />
+                </Avatar>
+              </Tooltip>
+            )}
+          </Stack>
         </Box>
+
+        {/* Notification Popover */}
+        <Popover
+          open={Boolean(notifAnchorEl)}
+          anchorEl={notifAnchorEl}
+          onClose={() => setNotifAnchorEl(null)}
+          anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+          transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+          slotProps={{
+            paper: {
+              sx: {
+                ...glassPanel,
+                borderRadius: '16px',
+                width: 380,
+                maxHeight: 520,
+                overflowY: 'auto',
+                mt: 0.5,
+              },
+            },
+          }}
+        >
+          <Box sx={{ p: 2 }}>
+            <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1.5 }}>
+              <NotificationsActive sx={{ color: '#ef4444', fontSize: 20 }} />
+              <Typography variant="h6" sx={{ fontWeight: 800, fontSize: '1rem' }}>
+                Notas Recebidas
+              </Typography>
+              {(stats?.divergencias_nota ?? 0) > 0 && (
+                <Chip
+                  label={`${stats?.divergencias_nota} divergência(s)`}
+                  size="small"
+                  color="error"
+                  sx={{ fontWeight: 700, fontSize: '0.7rem', height: 20 }}
+                />
+              )}
+            </Stack>
+
+            {emailsPendentes.filter((ep) => ep.tipo === 'nota').length === 0 ? (
+              <Typography variant="body2" color="text.secondary" sx={{ py: 2, textAlign: 'center' }}>
+                Nenhuma nota fiscal recebida ainda.
+              </Typography>
+            ) : (
+              <Stack spacing={1}>
+                {emailsPendentes
+                  .filter((ep) => ep.tipo === 'nota')
+                  .map((ep) => {
+                    const temDivergencia = alertas.some(
+                      (a) => a.transportadora === ep.transportadora_nome
+                    );
+                    const alertaRelacionado = alertas.find(
+                      (a) => a.transportadora === ep.transportadora_nome
+                    );
+                    return (
+                      <Box
+                        key={ep.id}
+                        sx={{
+                          p: 1.5,
+                          borderRadius: '10px',
+                          bgcolor: temDivergencia
+                            ? 'rgba(239,68,68,0.08)'
+                            : 'rgba(34,197,94,0.05)',
+                          border: `1px solid ${temDivergencia ? 'rgba(239,68,68,0.25)' : 'rgba(34,197,94,0.15)'}`,
+                        }}
+                      >
+                        <Stack direction="row" spacing={1} alignItems="flex-start">
+                          <Box
+                            sx={{
+                              mt: 0.25,
+                              color: temDivergencia ? '#ef4444' : '#22c55e',
+                              flexShrink: 0,
+                            }}
+                          >
+                            {temDivergencia ? (
+                              <WarningAmberIcon sx={{ fontSize: 18 }} />
+                            ) : (
+                              <CheckCircle sx={{ fontSize: 18 }} />
+                            )}
+                          </Box>
+                          <Box sx={{ flex: 1, minWidth: 0 }}>
+                            <Typography
+                              variant="body2"
+                              sx={{
+                                fontWeight: 700,
+                                color: temDivergencia ? '#991b1b' : '#0f172a',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap',
+                              }}
+                            >
+                              {ep.transportadora_nome}
+                            </Typography>
+                            <Typography
+                              variant="caption"
+                              color="text.secondary"
+                              display="block"
+                              sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                            >
+                              {ep.assunto || 'Sem assunto'}
+                            </Typography>
+                            {ep.valor_extraido != null && (
+                              <Typography variant="caption" display="block" sx={{ color: '#64748b' }}>
+                                R$ {(ep.valor_extraido / 100).toFixed(2)}
+                              </Typography>
+                            )}
+                            {temDivergencia && alertaRelacionado && (
+                              <Typography
+                                variant="caption"
+                                display="block"
+                                sx={{ color: '#ef4444', fontWeight: 600, mt: 0.25 }}
+                              >
+                                ⚠ {alertaRelacionado.msg}
+                              </Typography>
+                            )}
+                          </Box>
+                          {temDivergencia && alertaRelacionado && (
+                            <Button
+                              size="small"
+                              variant="outlined"
+                              color="error"
+                              onClick={() => handleResolverDivergencia(alertaRelacionado)}
+                              sx={{
+                                textTransform: 'none',
+                                fontSize: '0.68rem',
+                                borderRadius: '8px',
+                                flexShrink: 0,
+                                py: 0.25,
+                                px: 1,
+                                minWidth: 'auto',
+                              }}
+                            >
+                              Resolver
+                            </Button>
+                          )}
+                        </Stack>
+                      </Box>
+                    );
+                  })}
+              </Stack>
+            )}
+
+            {alertas.length > 0 && (
+              <>
+                <Divider sx={{ my: 1.5 }} />
+                <Typography variant="caption" sx={{ fontWeight: 700, color: '#94a3b8', display: 'block', mb: 1 }}>
+                  DIVERGÊNCIAS ABERTAS ({alertas.length})
+                </Typography>
+                <Stack spacing={0.75}>
+                  {alertas.map((alerta) => (
+                    <Stack
+                      key={alerta.id}
+                      direction="row"
+                      alignItems="center"
+                      justifyContent="space-between"
+                      sx={{
+                        p: 1,
+                        borderRadius: '8px',
+                        bgcolor: 'rgba(239,68,68,0.06)',
+                        border: '1px solid rgba(239,68,68,0.15)',
+                      }}
+                    >
+                      <Box sx={{ flex: 1, minWidth: 0 }}>
+                        <Typography variant="caption" sx={{ fontWeight: 700, color: '#991b1b', display: 'block' }}>
+                          {alerta.transportadora}
+                        </Typography>
+                        <Typography
+                          variant="caption"
+                          color="text.secondary"
+                          sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}
+                        >
+                          {alerta.msg}
+                        </Typography>
+                      </Box>
+                      <Button
+                        size="small"
+                        color="error"
+                        onClick={() => handleResolverDivergencia(alerta)}
+                        sx={{ textTransform: 'none', fontSize: '0.68rem', flexShrink: 0, minWidth: 'auto' }}
+                      >
+                        Ver
+                      </Button>
+                    </Stack>
+                  ))}
+                </Stack>
+              </>
+            )}
+          </Box>
+        </Popover>
 
         {/* Error Alert */}
         {error && (
@@ -1360,56 +1640,59 @@ const App = () => {
         >
           {/* Coluna Esquerda - Orçamentos & Alertas */}
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-            {/* Alerta de Divergência - Banner Principal */}
+            {/* Alerta de Divergência - Banner Principal (apenas o mais recente) */}
             {alertas.length > 0 && (
-              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                {alertas.map((alerta) => (
+              <Box
+                sx={{
+                  ...glassPanel,
+                  p: 3,
+                  background:
+                    'linear-gradient(90deg, rgba(239, 68, 68, 0.1) 0%, rgba(255, 255, 255, 0.3) 100%)',
+                  borderLeft: '6px solid #ef4444',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  flexWrap: 'wrap',
+                  gap: 2,
+                }}
+              >
+                <Stack direction="row" spacing={2} alignItems="center">
                   <Box
-                    key={alerta.id}
                     sx={{
-                      ...glassPanel,
-                      p: 3,
-                      background:
-                        'linear-gradient(90deg, rgba(239, 68, 68, 0.1) 0%, rgba(255, 255, 255, 0.3) 100%)',
-                      borderLeft: '6px solid #ef4444',
+                      p: 2,
+                      borderRadius: '50%',
+                      bgcolor: '#ef4444',
+                      color: 'white',
                       display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      flexWrap: 'wrap',
-                      gap: 2,
                     }}
                   >
-                    <Stack direction="row" spacing={2} alignItems="center">
-                      <Box
-                        sx={{
-                          p: 2,
-                          borderRadius: '50%',
-                          bgcolor: '#ef4444',
-                          color: 'white',
-                          display: 'flex',
-                        }}
-                      >
-                        <NotificationsActive />
-                      </Box>
-                      <Box>
-                        <Typography variant="h6" sx={{ fontWeight: 700, color: '#991b1b' }}>
-                          Divergência de Nota Detectada
-                        </Typography>
-                        <Typography variant="body2">
-                          Transportadora <b>{alerta.transportadora}</b>: {alerta.msg}
-                        </Typography>
-                      </Box>
-                    </Stack>
-                    <Button
-                      variant="outlined"
-                      color="error"
-                      onClick={() => handleResolverDivergencia(alerta.id)}
-                      sx={{ borderRadius: '12px', fontWeight: 'bold' }}
-                    >
-                      Resolver Agora
-                    </Button>
+                    <NotificationsActive />
                   </Box>
-                ))}
+                  <Box>
+                    <Typography variant="h6" sx={{ fontWeight: 700, color: '#991b1b' }}>
+                      Divergência de Nota Detectada
+                      {alertas.length > 1 && (
+                        <Chip
+                          label={`+${alertas.length - 1} mais`}
+                          size="small"
+                          color="error"
+                          sx={{ ml: 1, fontWeight: 700, fontSize: '0.7rem', height: 20 }}
+                        />
+                      )}
+                    </Typography>
+                    <Typography variant="body2">
+                      Transportadora <b>{alertas[0].transportadora}</b>: {alertas[0].msg}
+                    </Typography>
+                  </Box>
+                </Stack>
+                <Button
+                  variant="outlined"
+                  color="error"
+                  onClick={() => handleResolverDivergencia(alertas[0])}
+                  sx={{ borderRadius: '12px', fontWeight: 'bold' }}
+                >
+                  Resolver Agora
+                </Button>
               </Box>
             )}
 
@@ -2071,6 +2354,204 @@ const App = () => {
                   </TableBody>
                 </Table>
               </TableContainer>
+            </Box>
+          </Box>
+        ) : view === 'divergencia' ? (
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {/* Back button and alert message */}
+            <Stack direction="row" spacing={2} alignItems="center">
+              <Button
+                startIcon={<ArrowBack />}
+                onClick={() => setView('dashboard')}
+                sx={{ textTransform: 'none', fontWeight: 700, borderRadius: '12px' }}
+              >
+                Voltar
+              </Button>
+              {divergenciaAtual && (
+                <Alert
+                  severity="error"
+                  icon={<WarningAmberIcon />}
+                  sx={{ flex: 1, borderRadius: '12px', fontWeight: 600 }}
+                >
+                  <b>{divergenciaAtual.transportadora}</b>: {divergenciaAtual.msg}
+                </Alert>
+              )}
+            </Stack>
+
+            <Box
+              sx={{
+                display: 'grid',
+                gridTemplateColumns: { xs: '1fr', lg: '1fr 1fr' },
+                gap: 2,
+              }}
+            >
+              {/* Pedido (Orcamento) */}
+              <Box sx={{ ...glassPanel, p: 3 }}>
+                <Typography variant="h6" sx={{ fontWeight: 800, mb: 2 }}>
+                  Dados do Pedido
+                </Typography>
+                {detalheLoading ? (
+                  <LinearProgress sx={{ borderRadius: 5, height: 4 }} />
+                ) : orcamentoDetalhe ? (
+                  <Stack spacing={1.5}>
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography variant="body2" color="text.secondary">Descrição</Typography>
+                      <Typography variant="body2" sx={{ fontWeight: 700 }}>{orcamentoDetalhe.descricao}</Typography>
+                    </Stack>
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography variant="body2" color="text.secondary">Data de Criação</Typography>
+                      <Typography variant="body2" sx={{ fontWeight: 700 }}>{orcamentoDetalhe.data_criacao}</Typography>
+                    </Stack>
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography variant="body2" color="text.secondary">Status</Typography>
+                      <Chip
+                        label={orcamentoDetalhe.ativo ? 'Ativo' : 'Encerrado'}
+                        size="small"
+                        color={orcamentoDetalhe.ativo ? 'success' : 'default'}
+                        sx={{ fontWeight: 700 }}
+                      />
+                    </Stack>
+                    <Divider />
+                    <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#475569' }}>
+                      PROPOSTAS
+                    </Typography>
+                    {orcamentoDetalhe.propostas.map((proposta) => {
+                      const ganhadora = orcamentoDetalhe.proposta_ganhadora_id === proposta.id;
+                      const divergente =
+                        proposta.valor_frete_pago != null &&
+                        proposta.valor_frete_pago !== proposta.valor_proposta;
+                      return (
+                        <Box
+                          key={proposta.id}
+                          sx={{
+                            p: 1.5,
+                            borderRadius: '10px',
+                            bgcolor: divergente
+                              ? 'rgba(239,68,68,0.08)'
+                              : ganhadora
+                                ? 'rgba(34,197,94,0.06)'
+                                : 'rgba(99,102,241,0.05)',
+                            border: `1px solid ${divergente ? 'rgba(239,68,68,0.2)' : ganhadora ? 'rgba(34,197,94,0.2)' : 'rgba(99,102,241,0.12)'}`,
+                          }}
+                        >
+                          <Stack direction="row" justifyContent="space-between" alignItems="center">
+                            <Box>
+                              <Typography variant="caption" sx={{ fontWeight: 700 }}>
+                                {proposta.transportadora_nome ?? 'Transportadora não informada'}
+                              </Typography>
+                              <Typography variant="caption" display="block" color="text.secondary">
+                                Proposta: R$ {proposta.valor_proposta}
+                                {proposta.valor_frete_pago != null && (
+                                  <> · Nota: R$ {proposta.valor_frete_pago}</>
+                                )}
+                              </Typography>
+                            </Box>
+                            <Stack direction="row" spacing={0.5}>
+                              {ganhadora && <Chip label="Ganhadora" size="small" color="success" sx={{ fontWeight: 700, fontSize: '0.65rem' }} />}
+                              {divergente && <Chip label="Divergência" size="small" color="error" sx={{ fontWeight: 700, fontSize: '0.65rem' }} />}
+                            </Stack>
+                          </Stack>
+                        </Box>
+                      );
+                    })}
+                  </Stack>
+                ) : (
+                  <Typography variant="body2" color="text.secondary">Carregando dados do pedido...</Typography>
+                )}
+              </Box>
+
+              {/* Transportadora */}
+              <Box sx={{ ...glassPanel, p: 3 }}>
+                <Typography variant="h6" sx={{ fontWeight: 800, mb: 2 }}>
+                  Dados da Transportadora
+                </Typography>
+                {divergenciaAtual?.transportadora_id ? (
+                  (() => {
+                    const t = transportadoras.find((tr) => tr.id === divergenciaAtual.transportadora_id);
+                    return t ? (
+                      <Stack spacing={1.5}>
+                        <Stack direction="row" alignItems="center" spacing={1.5} sx={{ mb: 1 }}>
+                          <Avatar sx={{ bgcolor: '#6366f1', width: 44, height: 44, fontWeight: 700 }}>
+                            {t.nome.charAt(0).toUpperCase()}
+                          </Avatar>
+                          <Typography variant="h6" sx={{ fontWeight: 800 }}>{t.nome}</Typography>
+                        </Stack>
+                        <Divider />
+                        {[
+                          { label: 'CNPJ', value: t.cnpj },
+                          { label: 'Telefone', value: t.telefone },
+                          { label: 'Email Orçamento', value: t.email_orcamento },
+                          { label: 'Email Nota', value: t.email_nota },
+                        ].map(({ label, value }) => (
+                          <Stack key={label} direction="row" justifyContent="space-between">
+                            <Typography variant="body2" color="text.secondary">{label}</Typography>
+                            <Typography variant="body2" sx={{ fontWeight: 600 }}>{value}</Typography>
+                          </Stack>
+                        ))}
+                      </Stack>
+                    ) : (
+                      <Typography variant="body2" color="text.secondary">
+                        Transportadora: <b>{divergenciaAtual.transportadora}</b>
+                      </Typography>
+                    );
+                  })()
+                ) : (
+                  <Typography variant="body2" color="text.secondary">
+                    Transportadora: <b>{divergenciaAtual?.transportadora}</b>
+                  </Typography>
+                )}
+              </Box>
+
+              {/* Métricas da Transportadora */}
+              <Box
+                sx={{
+                  ...glassPanel,
+                  p: 3,
+                  gridColumn: { xs: '1', lg: '1 / -1' },
+                  background: 'linear-gradient(135deg, #1e293b 0%, #0f172a 100%)',
+                  color: 'white',
+                }}
+              >
+                <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 2 }}>
+                  <TrendingUp sx={{ color: '#6366f1' }} />
+                  <Typography variant="h6" sx={{ fontWeight: 800 }}>
+                    Histórico com esta Transportadora
+                  </Typography>
+                </Stack>
+                {metricasLoading ? (
+                  <LinearProgress sx={{ borderRadius: 5, height: 4, bgcolor: 'rgba(255,255,255,0.1)', '& .MuiLinearProgress-bar': { bgcolor: '#6366f1' } }} />
+                ) : transportadoraMetricas ? (
+                  <Box
+                    sx={{
+                      display: 'grid',
+                      gridTemplateColumns: { xs: '1fr 1fr', sm: 'repeat(3, 1fr)', md: 'repeat(6, 1fr)' },
+                      gap: 2,
+                    }}
+                  >
+                    {[
+                      { label: 'Total de Transações', value: String(transportadoraMetricas.total_transacoes) },
+                      { label: 'Com Divergência', value: String(transportadoraMetricas.transacoes_com_divergencia) },
+                      { label: 'Taxa de Divergência', value: `${transportadoraMetricas.taxa_divergencia_pct.toFixed(1)}%` },
+                      { label: 'Valor Médio Proposta', value: `R$ ${transportadoraMetricas.valor_medio_proposta.toFixed(2)}` },
+                      { label: 'Valor Médio Pago', value: `R$ ${transportadoraMetricas.valor_medio_frete_pago.toFixed(2)}` },
+                      { label: 'Divergência Média', value: `R$ ${transportadoraMetricas.divergencia_media.toFixed(2)}` },
+                    ].map(({ label, value }) => (
+                      <Box key={label} sx={{ textAlign: 'center', p: 1.5, bgcolor: 'rgba(255,255,255,0.05)', borderRadius: '12px' }}>
+                        <Typography variant="caption" sx={{ opacity: 0.6, display: 'block', mb: 0.5, fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                          {label}
+                        </Typography>
+                        <Typography variant="h6" sx={{ fontWeight: 900, fontSize: '1.1rem', color: label === 'Com Divergência' || label === 'Taxa de Divergência' ? '#fca5a5' : 'white' }}>
+                          {value}
+                        </Typography>
+                      </Box>
+                    ))}
+                  </Box>
+                ) : (
+                  <Typography variant="body2" sx={{ opacity: 0.6 }}>
+                    Nenhum dado de métricas disponível.
+                  </Typography>
+                )}
+              </Box>
             </Box>
           </Box>
         ) : view === 'relatorios' ? (
