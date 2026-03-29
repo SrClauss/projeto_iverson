@@ -41,8 +41,6 @@ import {
   FilterAlt,
   RestartAlt,
   DeleteOutline,
-  UploadFile,
-  Send,
   Dashboard as DashboardIcon,
   BarChart,
   NotificationsActive,
@@ -222,10 +220,6 @@ const App = () => {
   });
   const [orcamentoSelecionadoId, setOrcamentoSelecionadoId] = useState<string | null>(null);
   const [orcamentoDetalhe, setOrcamentoDetalhe] = useState<OrcamentoDetalhe | null>(null);
-  const [experimentoPrompt, setExperimentoPrompt] = useState('');
-  const [experimentoResposta, setExperimentoResposta] = useState('');
-  const [enviandoExperimento, setEnviandoExperimento] = useState(false);
-  const [arquivosExperimento, setArquivosExperimento] = useState<File[]>([]);
   const [novaProposta, setNovaProposta] = useState({
     valor_proposta: '',
     transportadora_id: '',
@@ -871,41 +865,6 @@ const App = () => {
     setTransportadoraIds([]);
     setMostrarInativos(false);
     await loadDashboard(false);
-  };
-
-  const handleSelecionarArquivosExperimento = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const files = event.target.files;
-    setArquivosExperimento(files ? Array.from(files) : []);
-  };
-
-  const handleEnviarExperimento = async () => {
-    if (!experimentoPrompt.trim() && arquivosExperimento.length === 0) {
-      setError('Informe um prompt ou selecione ao menos um arquivo para testar.');
-      return;
-    }
-
-    setError(null);
-    setEnviandoExperimento(true);
-
-    try {
-      const arquivosResumo = arquivosExperimento.length
-        ? `\n\nArquivos selecionados para contexto: ${arquivosExperimento
-            .map((file) => `${file.name} (${file.type || 'tipo-desconhecido'}, ${file.size} bytes)`)
-            .join(', ')}`
-        : '';
-
-      const promptFinal = `${experimentoPrompt.trim()}${arquivosResumo}`;
-
-      const resposta = await invoke<string>('call_gemini_api', {
-        prompt: promptFinal,
-      });
-
-      setExperimentoResposta(resposta);
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setEnviandoExperimento(false);
-    }
   };
 
   if (loading) {
