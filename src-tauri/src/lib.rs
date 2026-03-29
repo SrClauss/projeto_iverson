@@ -128,9 +128,21 @@ struct TransportadoraItem {
 #[derive(Debug, Serialize)]
 struct DashboardAlertaItem {
     id: String,
+    orcamento_id: String,
     transportadora: String,
+    transportadora_id: Option<String>,
     msg: String,
     severity: String,
+}
+
+#[derive(Debug, Serialize)]
+struct TransportadoraMetricas {
+    total_transacoes: u32,
+    transacoes_com_divergencia: u32,
+    taxa_divergencia_pct: f64,
+    valor_medio_proposta: f64,
+    valor_medio_frete_pago: f64,
+    divergencia_media: f64,
 }
 
 #[derive(Debug, Serialize)]
@@ -797,7 +809,9 @@ async fn get_dashboard_alertas(limit: u32) -> Result<Vec<DashboardAlertaItem>, S
 
             alertas.push(DashboardAlertaItem {
                 id: format!("{}-{}", orcamento_id, indice),
+                orcamento_id: orcamento_id.clone(),
                 transportadora,
+                transportadora_id: proposta.transportadora_id.as_ref().map(|oid| oid.to_hex()),
                 msg: format!(
                     "Divergência: frete pago R$ {} vs proposta R$ {}",
                     valor_frete_pago, proposta.valor_proposta
@@ -812,6 +826,88 @@ async fn get_dashboard_alertas(limit: u32) -> Result<Vec<DashboardAlertaItem>, S
     }
 
     Ok(alertas)
+}
+
+#[tauri::command]
+async fn get_transportadora_metricas(transportadora_id: String) -> Result<TransportadoraMetricas, String> {
+    let database = db::get_database().await?;
+    let transportadora_oid = mongodb::bson::oid::ObjectId::parse_str(&transportadora_id)
+        .map_err(|e| format!("ID de transportadora inválido: {}", e))?;
+
+    let mut cursor = database
+        .orcamentos
+        .find(mongodb::bson::doc! { "propostas.transportadora_id": transportadora_oid })
+        .await
+        .map_err(|e| format!("Erro ao buscar orçamentos: {}", e))?;
+
+    let mut total_transacoes: u32 = 0;
+    let mut transacoes_com_divergencia: u32 = 0;
+    let mut soma_proposta: f64 = 0.0;
+    let mut soma_frete_pago: f64 = 0.0;
+    let mut soma_divergencia: f64 = 0.0;
+    let mut count_frete_pago: u32 = 0;
+
+    while cursor
+        .advance()
+        .await
+        .map_err(|e| format!("Erro ao coletar orçamentos: {}", e))?
+    {
+        let orcamento: db::models::Orcamento = cursor
+            .deserialize_current()
+            .map_err(|e| format!("Erro ao desserializar orçamento: {}", e))?;
+
+        for proposta in &orcamento.propostas {
+            if proposta.transportadora_id.as_ref() != Some(&transportadora_oid) {
+                continue;
+            }
+            total_transacoes = total_transacoes.saturating_add(1);
+            soma_proposta += proposta.valor_proposta as f64;
+
+            if let Some(frete_pago) = proposta.valor_frete_pago {
+                count_frete_pago = count_frete_pago.saturating_add(1);
+                soma_frete_pago += frete_pago as f64;
+                let diff = (frete_pago - proposta.valor_proposta).unsigned_abs() as f64;
+                if frete_pago != proposta.valor_proposta {
+                    transacoes_com_divergencia = transacoes_com_divergencia.saturating_add(1);
+                    soma_divergencia += diff;
+                }
+            }
+        }
+    }
+
+    let taxa_divergencia_pct = if total_transacoes > 0 {
+        (transacoes_com_divergencia as f64 / total_transacoes as f64) * 100.0
+    } else {
+        0.0
+    };
+
+    // Values are stored in centavos, divide by 100 for display
+    let valor_medio_proposta = if total_transacoes > 0 {
+        (soma_proposta / total_transacoes as f64) / 100.0
+    } else {
+        0.0
+    };
+
+    let valor_medio_frete_pago = if count_frete_pago > 0 {
+        (soma_frete_pago / count_frete_pago as f64) / 100.0
+    } else {
+        0.0
+    };
+
+    let divergencia_media = if transacoes_com_divergencia > 0 {
+        (soma_divergencia / transacoes_com_divergencia as f64) / 100.0
+    } else {
+        0.0
+    };
+
+    Ok(TransportadoraMetricas {
+        total_transacoes,
+        transacoes_com_divergencia,
+        taxa_divergencia_pct,
+        valor_medio_proposta,
+        valor_medio_frete_pago,
+        divergencia_media,
+    })
 }
 
 #[tauri::command]
@@ -1823,6 +1919,7 @@ pub fn run() {
             excluir_orcamento,
             excluir_email,
             set_tray_divergencias,
+            get_transportadora_metricas,
             google_auth_get_status,
             google_auth_start_login,
             google_auth_logout
