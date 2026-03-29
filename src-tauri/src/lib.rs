@@ -196,6 +196,7 @@ fn transportadoras_preview_for_orcamento(
         .collect()
 }
 
+#[allow(dead_code)]
 fn parse_optional_object_id(value: Option<String>) -> Result<Option<mongodb::bson::oid::ObjectId>, String> {
     match value {
         Some(raw) if !raw.trim().is_empty() => mongodb::bson::oid::ObjectId::parse_str(raw.trim())
@@ -362,25 +363,6 @@ fn get_non_empty_env(var_name: &str) -> Option<String> {
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
-}
-
-fn resolve_google_refresh_token() -> Option<String> {
-    if let Some(token) = get_non_empty_env("GOOGLE_REFRESH_TOKEN") {
-        return Some(token);
-    }
-
-    // Fallback: valor embutido em tempo de compilação pela CI
-    if let Some(token) = option_env!("GOOGLE_REFRESH_TOKEN").map(|s| s.to_string()).filter(|s| !s.is_empty()) {
-        return Some(token);
-    }
-
-    let legacy_token = get_non_empty_env("GOOGLE_ACCESS_TOKEN")?;
-
-    if legacy_token.starts_with("1//") {
-        return Some(legacy_token);
-    }
-
-    None
 }
 
 fn resolve_gemini_api_key() -> Option<String> {

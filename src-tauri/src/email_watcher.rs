@@ -336,6 +336,7 @@ async fn classificar_tipo_email(database: &db::Database, transportadora_id: Obje
 
 // ── Processamento de Cotação ─────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 async fn processar_cotacao(
     database: &db::Database,
     _gmail: &GmailClient,
@@ -473,6 +474,7 @@ async fn processar_cotacao(
 
 // ── Processamento de Nota ────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 async fn processar_nota(
     database: &db::Database,
     gmail: &GmailClient,

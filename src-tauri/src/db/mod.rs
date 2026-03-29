@@ -72,6 +72,7 @@ pub async fn get_database() -> Result<Database, String> {
 
 
 
+#[allow(dead_code)]
 pub async fn connect_database() -> Result<String, String> {
     match get_database().await {
         Ok(_) => Ok("Conectado ao banco de dados com sucesso".to_string()),

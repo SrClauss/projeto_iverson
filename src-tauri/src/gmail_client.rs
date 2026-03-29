@@ -18,6 +18,7 @@ pub struct GoogleTokenInfoResponse {
 #[allow(non_snake_case)]
 pub struct GmailMessagesListResponse {
     pub messages: Option<Vec<GmailMessageId>>,
+    #[allow(dead_code)]
     pub resultSizeEstimate: Option<u32>,
 }
 
@@ -31,6 +32,7 @@ pub struct GmailMessageId {
 pub struct GmailMessageResponse {
     pub snippet: Option<String>,
     pub payload: Option<GmailMessagePart>,
+    #[allow(dead_code)]
     pub internalDate: Option<String>,
 }
 
@@ -55,6 +57,7 @@ pub struct GmailHeader {
 pub struct GmailBody {
     pub data: Option<String>,
     pub attachmentId: Option<String>,
+    #[allow(dead_code)]
     pub size: Option<u32>,
 }
 
@@ -368,6 +371,7 @@ impl GmailClient {
     }
 
     /// Retorna status da inbox (mantém compatibilidade)
+    #[allow(dead_code)]
     pub async fn get_inbox_status(&self) -> Result<InboxStatus, String> {
         let inbox_ids = self.search_messages("label:INBOX", 1).await?;
         let _unread_ids = self.search_messages("label:INBOX is:unread", 1).await?;
@@ -426,6 +430,7 @@ impl GmailClient {
 }
 
 #[derive(Debug, serde::Serialize)]
+#[allow(dead_code)]
 pub struct InboxStatus {
     pub total_emails: u32,
     pub nao_lidos: u32,
