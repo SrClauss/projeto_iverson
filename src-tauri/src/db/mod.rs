@@ -5,6 +5,8 @@ pub mod models;
 fn resolve_db_uri() -> Result<String, String> {
     let db_uri = env::var("DB_URI")
         .or_else(|_| env::var("MONGO_URI"))
+        // Fallback: valor embutido em tempo de compilação pela CI
+        .or_else(|_| option_env!("DB_URI").map(|s| s.to_string()).ok_or(()))
         .map_err(|_| "DB_URI/MONGO_URI não definida no ambiente".to_string())?;
 
     if db_uri.trim().is_empty() {

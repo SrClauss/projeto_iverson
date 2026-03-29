@@ -201,9 +201,13 @@ impl GmailClient {
     /// Agora aceita opcionalmente um refresh token já resolvido (do AuthState).
     pub async fn authenticate() -> Result<Self, String> {
         let client_id = std::env::var("GOOGLE_CLIENT_ID")
-            .map_err(|_| "GOOGLE_CLIENT_ID não definido".to_string())?;
+            .ok()
+            .or_else(|| option_env!("GOOGLE_CLIENT_ID").map(|s| s.to_string()))
+            .ok_or_else(|| "GOOGLE_CLIENT_ID não definido".to_string())?;
         let client_secret = std::env::var("GOOGLE_CLIENT_SECRET")
-            .map_err(|_| "GOOGLE_CLIENT_SECRET não definido".to_string())?;
+            .ok()
+            .or_else(|| option_env!("GOOGLE_CLIENT_SECRET").map(|s| s.to_string()))
+            .ok_or_else(|| "GOOGLE_CLIENT_SECRET não definido".to_string())?;
 
         // Tenta token do AuthState (login) primeiro, depois fallback env var
         let refresh_token = {

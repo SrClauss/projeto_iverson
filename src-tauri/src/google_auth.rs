@@ -166,7 +166,9 @@ fn delete_stored_token() {
 
 pub fn build_auth_url() -> Result<String, String> {
     let client_id = std::env::var("GOOGLE_CLIENT_ID")
-        .map_err(|_| "GOOGLE_CLIENT_ID não definido no .env".to_string())?;
+        .ok()
+        .or_else(|| option_env!("GOOGLE_CLIENT_ID").map(|s| s.to_string()))
+        .ok_or_else(|| "GOOGLE_CLIENT_ID não definido".to_string())?;
 
     let url = format!(
         "https://accounts.google.com/o/oauth2/v2/auth?\
@@ -283,9 +285,13 @@ struct UserInfoResponse {
 
 pub async fn exchange_code_for_tokens(code: &str) -> Result<StoredToken, String> {
     let client_id = std::env::var("GOOGLE_CLIENT_ID")
-        .map_err(|_| "GOOGLE_CLIENT_ID não definido".to_string())?;
+        .ok()
+        .or_else(|| option_env!("GOOGLE_CLIENT_ID").map(|s| s.to_string()))
+        .ok_or_else(|| "GOOGLE_CLIENT_ID não definido".to_string())?;
     let client_secret = std::env::var("GOOGLE_CLIENT_SECRET")
-        .map_err(|_| "GOOGLE_CLIENT_SECRET não definido".to_string())?;
+        .ok()
+        .or_else(|| option_env!("GOOGLE_CLIENT_SECRET").map(|s| s.to_string()))
+        .ok_or_else(|| "GOOGLE_CLIENT_SECRET não definido".to_string())?;
 
     let http = reqwest::Client::new();
 

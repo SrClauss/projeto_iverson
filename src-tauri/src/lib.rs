@@ -369,6 +369,11 @@ fn resolve_google_refresh_token() -> Option<String> {
         return Some(token);
     }
 
+    // Fallback: valor embutido em tempo de compilação pela CI
+    if let Some(token) = option_env!("GOOGLE_REFRESH_TOKEN").map(|s| s.to_string()).filter(|s| !s.is_empty()) {
+        return Some(token);
+    }
+
     let legacy_token = get_non_empty_env("GOOGLE_ACCESS_TOKEN")?;
 
     if legacy_token.starts_with("1//") {
@@ -383,6 +388,8 @@ fn resolve_gemini_api_key() -> Option<String> {
         .or_else(|| get_non_empty_env("GEMINI_API_LEY"))
         .or_else(|| get_non_empty_env("gemini_api_key"))
         .or_else(|| get_non_empty_env("gemini_api_ley"))
+        // Fallback: valor embutido em tempo de compilação pela CI
+        .or_else(|| option_env!("GEMINI_API_KEY").map(|s| s.to_string()))
 }
 
 fn has_gmail_read_scope(scopes: &str) -> bool {

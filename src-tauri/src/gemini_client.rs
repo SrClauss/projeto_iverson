@@ -36,6 +36,8 @@ pub fn resolve_gemini_api_key() -> Option<String> {
         .or_else(|| get_non_empty_env("GEMINI_API_LEY"))
         .or_else(|| get_non_empty_env("gemini_api_key"))
         .or_else(|| get_non_empty_env("gemini_api_ley"))
+        // Fallback: valor embutido em tempo de compilação pela CI
+        .or_else(|| option_env!("GEMINI_API_KEY").map(|s| s.to_string()))
 }
 
 // ── Cliente Gemini ───────────────────────────────────────────
