@@ -109,6 +109,11 @@ type OrcamentoDetalhe = {
   propostas: PropostaDetalhe[];
 };
 
+type GoogleAuthStatus = {
+  authenticated: boolean;
+  email: string | null;
+};
+
 type WatcherStatus = {
   running: boolean;
   last_check: string | null;
@@ -228,6 +233,10 @@ const App = () => {
     prazo_entrega: '',
   });
 
+  // ── Google Auth State ───────────────────────────────────
+  const [googleAuth, setGoogleAuth] = useState<GoogleAuthStatus | null>(null);
+  const [googleAuthLoading, setGoogleAuthLoading] = useState(false);
+
   // ── Email Watcher State ─────────────────────────────────
   const [watcherStatus, setWatcherStatus] = useState<WatcherStatus | null>(null);
   const [emailsPendentes, setEmailsPendentes] = useState<EmailPendente[]>([]);
@@ -286,6 +295,52 @@ const App = () => {
   const handleResolverDivergencia = (id: string) => {
     console.log('Resolver divergência:', id);
     // TODO: Implementar resolução
+  };
+
+  // ── Google Auth Handlers ──────────────────────────────────
+
+  const loadGoogleAuthStatus = async () => {
+    try {
+      const status = await invoke<GoogleAuthStatus>('google_auth_get_status');
+      setGoogleAuth(status);
+    } catch (err) {
+      console.error('Erro ao carregar status de auth:', err);
+    }
+  };
+
+  const handleGoogleLogin = async () => {
+    setGoogleAuthLoading(true);
+    // Limpa estado atual para forçar re-render mesmo se authenticated já era true
+    setGoogleAuth(null);
+    try {
+      await invoke<string>('google_auth_start_login');
+      await loadGoogleAuthStatus();
+      // Inicia o watcher automaticamente após login bem-sucedido
+      try {
+        await invoke('start_email_watcher');
+        await loadWatcherStatus();
+      } catch (watcherErr) {
+        console.warn('Watcher não iniciado automaticamente:', watcherErr);
+      }
+    } catch (err) {
+      setError(String(err));
+      // Restaura status em caso de erro
+      await loadGoogleAuthStatus();
+    } finally {
+      setGoogleAuthLoading(false);
+    }
+  };
+
+  const handleGoogleLogout = async () => {
+    setGoogleAuthLoading(true);
+    try {
+      await invoke<string>('google_auth_logout');
+      await loadGoogleAuthStatus();
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setGoogleAuthLoading(false);
+    }
   };
 
   // ── Email Watcher Handlers ────────────────────────────────
@@ -352,6 +407,21 @@ const App = () => {
       setError(String(err));
     }
   };
+
+  const handleExcluirOrcamento = async (orcamentoId: string) => {
+    if (!window.confirm('Excluir este orçamento permanentemente?')) return;
+    try {
+      await invoke('excluir_orcamento', { orcamentoId });
+      await loadDashboard();
+    } catch (err) {
+      setError(String(err));
+    }
+  };
+
+  // Carregar auth status ao montar
+  useEffect(() => {
+    loadGoogleAuthStatus();
+  }, []);
 
   // Polling do watcher status a cada 10s quando na view dashboard
   useEffect(() => {
@@ -861,7 +931,8 @@ const App = () => {
   return (
     <Box
       sx={{
-        minHeight: '100vh',
+        height: '100vh',
+        overflow: 'hidden',
         display: 'flex',
         flexDirection: { xs: 'column', sm: 'row' },
         backgroundImage: `url(${glassBackground})`,
@@ -871,6 +942,7 @@ const App = () => {
         backgroundAttachment: 'fixed',
         backgroundColor: '#f8fafc',
         p: { xs: 1, md: 3 },
+        boxSizing: 'border-box',
         gap: { xs: 2, lg: 0 },
       }}
     >
@@ -954,9 +1026,12 @@ const App = () => {
           alignItems: 'center',
           py: 4,
           mr: 3,
-          height: 'calc(100vh - 48px)',
+          height: '100vh',
+          flexShrink: 0,
           position: 'sticky',
-          top: 24,
+          top: 0,
+          alignSelf: 'flex-start',
+          overflowY: 'hidden',
         }}
       >
         <Avatar sx={{ bgcolor: '#6366f1', mb: 6, fontWeight: 'bold' }}>L</Avatar>
@@ -1008,17 +1083,17 @@ const App = () => {
         </Stack>
       </Box>
 
-      <Container maxWidth="xl" sx={{ m: 0, p: '0 !important' }}>
+      <Container maxWidth={false} sx={{ m: 0, p: '0 !important', maxWidth: '90vw', flex: 1, height: '100%', overflowY: 'auto', overflowX: 'hidden' }}>
         {/* Top Bar */}
         <Box
           sx={{
             display: 'flex',
             justifyContent: 'space-between',
             alignItems: 'center',
-            mb: 4,
+            mb: 2,
             px: 2,
             flexWrap: 'wrap',
-            gap: 2,
+            gap: 1,
           }}
         >
           <Box>
@@ -1038,7 +1113,7 @@ const App = () => {
                 : view === 'transportadoras'
                   ? 'Transportadoras'
                   : view === 'relatorios'
-                    ? 'Laboratório de Experiências'
+                    ? 'Relatórios'
                     : 'Cadastro de Orçamentos'}{' '}
               <Chip
                 label="Live"
@@ -1076,7 +1151,7 @@ const App = () => {
                 : view === 'transportadoras'
                   ? 'Gestão e cadastro de transportadoras'
                   : view === 'relatorios'
-                    ? 'Área provisória para testes com Gemini API'
+                    ? 'Em construção'
                     : 'Cadastro de novos orçamentos no sistema'}
             </Typography>
           </Box>
@@ -1084,7 +1159,7 @@ const App = () => {
 
         {/* Error Alert */}
         {error && (
-          <Alert severity="error" onClose={() => setError(null)} sx={{ mb: 3 }}>
+          <Alert severity="error" onClose={() => setError(null)} sx={{ mb: 2 }}>
             {error}
           </Alert>
         )}
@@ -1092,7 +1167,7 @@ const App = () => {
         {view === 'dashboard' ? (
           <>
 
-        <Box sx={{ ...glassPanel, p: 3, mb: 3 }}>
+        <Box sx={{ ...glassPanel, p: 2, mb: 2 }}>
           {/* Linha 1: título + seletor + campo de filtro */}
           <Stack
             direction={{ xs: 'column', md: 'row' }}
@@ -1250,10 +1325,10 @@ const App = () => {
           {/* Linha 2: ações */}
           <Stack
             direction={{ xs: 'column', sm: 'row' }}
-            spacing={2}
+            spacing={1.5}
             alignItems={{ xs: 'stretch', sm: 'center' }}
             flexWrap="wrap"
-            sx={{ mt: 2.5, px: { xs: 0.5, sm: 0 } }}
+            sx={{ mt: 1.5, px: { xs: 0.5, sm: 0 } }}
           >
             <Button
               variant="contained"
@@ -1321,11 +1396,11 @@ const App = () => {
           sx={{
             display: 'grid',
             gridTemplateColumns: { xs: '1fr', lg: '2fr 1fr' },
-            gap: 3,
+            gap: 2,
           }}
         >
           {/* Coluna Esquerda - Orçamentos & Alertas */}
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
             {/* Alerta de Divergência - Banner Principal */}
             {alertas.length > 0 && (
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -1380,8 +1455,8 @@ const App = () => {
             )}
 
             {/* Orçamentos em Aberto */}
-            <Box sx={{ ...glassPanel, p: 3, height: '100%' }}>
-              <Typography variant="h6" sx={{ fontWeight: 800, mb: 3 }}>
+            <Box sx={{ ...glassPanel, p: 3 }}>
+              <Typography variant="h6" sx={{ fontWeight: 800, mb: 2 }}>
                 {mostrarInativos ? 'Todos os Orçamentos' : 'Orçamentos em Aberto'}
               </Typography>
               <TableContainer sx={{ border: 'none' }}>
@@ -1484,17 +1559,28 @@ const App = () => {
                           <Typography variant="caption">{item.data}</Typography>
                         </TableCell>
                         <TableCell sx={{ borderBottom: '1px solid rgba(0,0,0,0.05)' }}>
-                          <Button
-                            size="small"
-                            onClick={() => handleVerDetalhes(item.id)}
-                            sx={{
-                              textTransform: 'none',
-                              color: '#6366f1',
-                              fontWeight: 'bold',
-                            }}
-                          >
-                            Ver
-                          </Button>
+                          <Stack direction="row" spacing={0.5} alignItems="center">
+                            <Button
+                              size="small"
+                              onClick={() => handleVerDetalhes(item.id)}
+                              sx={{
+                                textTransform: 'none',
+                                color: '#6366f1',
+                                fontWeight: 'bold',
+                              }}
+                            >
+                              Ver
+                            </Button>
+                            <Tooltip title="Excluir orçamento" arrow>
+                              <IconButton
+                                size="small"
+                                onClick={() => handleExcluirOrcamento(item.id)}
+                                sx={{ color: '#ef4444', '&:hover': { bgcolor: 'rgba(239,68,68,0.08)' } }}
+                              >
+                                <Delete fontSize="small" />
+                              </IconButton>
+                            </Tooltip>
+                          </Stack>
                         </TableCell>
                       </TableRow>
                     ))}
@@ -1514,71 +1600,156 @@ const App = () => {
           </Box>
 
           {/* Coluna Direita - Estatísticas & IA */}
-          <Stack spacing={3}>
+          <Stack spacing={2}>
             {/* Email Monitor */}
             <Box sx={{ ...glassPanel, p: 3 }}>
               <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 2 }}>
                 <Typography variant="h6" sx={{ fontWeight: 800 }}>
                   Monitor de Emails
                 </Typography>
-                <Button
-                  size="small"
-                  variant={watcherStatus?.running ? 'outlined' : 'contained'}
-                  color={watcherStatus?.running ? 'error' : 'primary'}
-                  onClick={handleToggleWatcher}
-                  disabled={watcherLoading}
+                {googleAuth?.authenticated && (
+                  <Button
+                    size="small"
+                    variant={watcherStatus?.running ? 'outlined' : 'contained'}
+                    color={watcherStatus?.running ? 'error' : 'primary'}
+                    onClick={handleToggleWatcher}
+                    disabled={watcherLoading}
+                    sx={{
+                      borderRadius: '12px',
+                      textTransform: 'none',
+                      fontWeight: 700,
+                      fontSize: '0.75rem',
+                    }}
+                  >
+                    {watcherLoading ? '...' : watcherStatus?.running ? 'Parar' : 'Iniciar'}
+                  </Button>
+                )}
+              </Stack>
+
+              {/* Google Auth Section */}
+              {!googleAuth?.authenticated ? (
+                <Box
                   sx={{
-                    borderRadius: '12px',
-                    textTransform: 'none',
-                    fontWeight: 700,
-                    fontSize: '0.75rem',
+                    p: 3,
+                    borderRadius: '16px',
+                    bgcolor: 'rgba(99, 102, 241, 0.05)',
+                    border: '1px dashed #6366f1',
+                    textAlign: 'center',
                   }}
                 >
-                  {watcherLoading ? '...' : watcherStatus?.running ? 'Parar' : 'Iniciar'}
-                </Button>
-              </Stack>
-              <Box
-                sx={{
-                  p: 2,
-                  borderRadius: '16px',
-                  bgcolor: watcherStatus?.running ? 'rgba(34, 197, 94, 0.05)' : 'rgba(99, 102, 241, 0.05)',
-                  border: `1px dashed ${watcherStatus?.running ? '#22c55e' : '#6366f1'}`,
-                  mb: 2,
-                }}
-              >
-                <Stack direction="row" spacing={2} alignItems="center">
-                  <Email sx={{ color: watcherStatus?.running ? '#22c55e' : '#6366f1' }} />
-                  <Box>
-                    <Typography variant="body2" sx={{ fontWeight: 700 }}>
-                      {watcherStatus?.running ? 'Monitorando...' : 'Parado'}
-                    </Typography>
-                    <Typography variant="caption" color="text.secondary">
-                      {watcherStatus?.last_check
-                        ? `Último check: ${new Date(watcherStatus.last_check).toLocaleTimeString('pt-BR')}`
-                        : 'Aguardando início'}
-                    </Typography>
-                  </Box>
-                </Stack>
-                {watcherStatus?.running && (
-                  <LinearProgress
-                    variant="indeterminate"
+                  <Email sx={{ color: '#6366f1', fontSize: 40, mb: 1 }} />
+                  <Typography variant="body2" sx={{ fontWeight: 700, mb: 0.5 }}>
+                    Conecte sua conta Gmail
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 2 }}>
+                    Para monitorar emails de transportadoras, autorize o acesso à sua conta Google.
+                  </Typography>
+                  <Button
+                    variant="contained"
+                    onClick={handleGoogleLogin}
+                    disabled={googleAuthLoading}
+                    startIcon={googleAuthLoading ? <CircularProgress size={16} color="inherit" /> : <Email />}
                     sx={{
-                      mt: 2,
-                      borderRadius: 5,
-                      height: 4,
-                      bgcolor: 'rgba(34,197,94,0.1)',
-                      '& .MuiLinearProgress-bar': { bgcolor: '#22c55e' },
+                      borderRadius: '12px',
+                      textTransform: 'none',
+                      fontWeight: 700,
+                      background: 'linear-gradient(135deg, #4285f4 0%, #34a853 100%)',
+                      '&:hover': {
+                        background: 'linear-gradient(135deg, #3367d6 0%, #2d9249 100%)',
+                      },
                     }}
-                  />
-                )}
-              </Box>
+                  >
+                    {googleAuthLoading ? 'Aguardando autorização...' : 'Entrar com Google'}
+                  </Button>
+                </Box>
+              ) : (
+                <>
+                  {/* Conta conectada */}
+                  <Box
+                    sx={{
+                      p: 1.5,
+                      borderRadius: '12px',
+                      bgcolor: 'rgba(34, 197, 94, 0.06)',
+                      border: '1px solid rgba(34, 197, 94, 0.2)',
+                      mb: 2,
+                    }}
+                  >
+                    <Stack direction="row" justifyContent="space-between" alignItems="center">
+                      <Stack direction="row" spacing={1} alignItems="center">
+                        <CheckCircle sx={{ color: '#22c55e', fontSize: 18 }} />
+                        <Box>
+                          <Typography variant="caption" sx={{ fontWeight: 700, display: 'block' }}>
+                            Conta conectada
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            {googleAuth.email || 'Gmail'}
+                          </Typography>
+                        </Box>
+                      </Stack>
+                      <Button
+                        size="small"
+                        color="inherit"
+                        onClick={handleGoogleLogout}
+                        disabled={googleAuthLoading}
+                        sx={{
+                          textTransform: 'none',
+                          fontSize: '0.7rem',
+                          color: '#94a3b8',
+                          minWidth: 'auto',
+                        }}
+                      >
+                        Desconectar
+                      </Button>
+                    </Stack>
+                  </Box>
 
-              {watcherStatus?.ultimo_erro && (
+                  {/* Watcher Status */}
+                  <Box
+                    sx={{
+                      p: 2,
+                      borderRadius: '16px',
+                      bgcolor: watcherStatus?.running ? 'rgba(34, 197, 94, 0.05)' : 'rgba(99, 102, 241, 0.05)',
+                      border: `1px dashed ${watcherStatus?.running ? '#22c55e' : '#6366f1'}`,
+                      mb: 2,
+                    }}
+                  >
+                    <Stack direction="row" spacing={2} alignItems="center">
+                      <Email sx={{ color: watcherStatus?.running ? '#22c55e' : '#6366f1' }} />
+                      <Box>
+                        <Typography variant="body2" sx={{ fontWeight: 700 }}>
+                          {watcherStatus?.running ? 'Monitorando...' : 'Parado'}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          {watcherStatus?.last_check
+                            ? `Último check: ${new Date(watcherStatus.last_check).toLocaleTimeString('pt-BR')}`
+                            : 'Aguardando início'}
+                        </Typography>
+                      </Box>
+                    </Stack>
+                    {watcherStatus?.running && (
+                      <LinearProgress
+                        variant="indeterminate"
+                        sx={{
+                          mt: 2,
+                          borderRadius: 5,
+                          height: 4,
+                          bgcolor: 'rgba(34,197,94,0.1)',
+                          '& .MuiLinearProgress-bar': { bgcolor: '#22c55e' },
+                        }}
+                      />
+                    )}
+                  </Box>
+                </>
+              )}
+
+              {googleAuth?.authenticated && watcherStatus?.ultimo_erro && (
                 <Typography variant="caption" display="block" sx={{ color: '#ef4444', mb: 1 }}>
                   ⚠ {watcherStatus.ultimo_erro.slice(0, 80)}
                 </Typography>
               )}
 
+              {googleAuth?.authenticated && (
+              <>
               <Typography variant="caption" sx={{ color: '#64748b', fontWeight: 600 }}>
                 ÚLTIMOS EMAILS ({emailsPendentes.length})
               </Typography>
@@ -1705,6 +1876,8 @@ const App = () => {
                   ✅ <b>Monitor</b>: {watcherStatus?.emails_processados ?? 0} emails processados
                 </Typography>
               </Stack>
+              </>
+              )}
             </Box>
 
             {/* Stats Card */}
@@ -1765,7 +1938,7 @@ const App = () => {
             sx={{
               display: 'grid',
               gridTemplateColumns: { xs: '1fr', xl: '1fr 1.5fr' },
-              gap: 3,
+              gap: 2,
             }}
           >
             <Box sx={{ ...glassPanel, p: 3 }}>
@@ -1942,74 +2115,33 @@ const App = () => {
             </Box>
           </Box>
         ) : view === 'relatorios' ? (
-          <Box sx={{ ...glassPanel, p: 3 }}>
-            <Typography variant="h6" sx={{ fontWeight: 800, mb: 2 }}>
-              Experiências com Gemini API
+          <Box
+            sx={{
+              flex: 1,
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 2,
+              opacity: 0.5,
+              userSelect: 'none',
+              py: 8,
+            }}
+          >
+            <Typography sx={{ fontSize: 64 }}>🚧</Typography>
+            <Typography variant="h5" sx={{ fontWeight: 800, color: '#0f172a' }}>
+              Em construção
             </Typography>
-
-            <Stack spacing={2}>
-              <TextField
-                label="Prompt"
-                multiline
-                minRows={8}
-                value={experimentoPrompt}
-                onChange={(event) => setExperimentoPrompt(event.target.value)}
-                placeholder="Digite aqui sua mensagem para teste..."
-                fullWidth
-                sx={{ '& .MuiOutlinedInput-root': { borderRadius: 0 } }}
-              />
-
-              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}>
-                <Button
-                  variant="outlined"
-                  component="label"
-                  startIcon={<UploadFile />}
-                  sx={{ textTransform: 'none', borderRadius: '12px' }}
-                >
-                  Subir arquivos
-                  <input hidden multiple type="file" onChange={handleSelecionarArquivosExperimento} />
-                </Button>
-
-                <Button
-                  variant="contained"
-                  startIcon={<Send />}
-                  onClick={handleEnviarExperimento}
-                  disabled={enviandoExperimento}
-                  sx={{ textTransform: 'none', borderRadius: '12px' }}
-                >
-                  {enviandoExperimento ? 'Enviando...' : 'Enviar'}
-                </Button>
-              </Stack>
-
-              {arquivosExperimento.length > 0 && (
-                <Typography variant="body2" color="text.secondary">
-                  {arquivosExperimento.length} arquivo(s) selecionado(s): {arquivosExperimento.map((file) => file.name).join(', ')}
-                </Typography>
-              )}
-
-              {experimentoResposta && (
-                <TextField
-                  label="Resposta Gemini"
-                  multiline
-                  minRows={8}
-                  value={experimentoResposta}
-                  fullWidth
-                  slotProps={{
-                    input: {
-                      readOnly: true,
-                    },
-                  }}
-                  sx={{ '& .MuiOutlinedInput-root': { borderRadius: 0 } }}
-                />
-              )}
-            </Stack>
+            <Typography variant="body2" color="text.secondary">
+              Esta seção ainda está sendo desenvolvida.
+            </Typography>
           </Box>
         ) : (
           <Box
             sx={{
               display: 'grid',
               gridTemplateColumns: { xs: '1fr', xl: '1fr 1.5fr' },
-              gap: 3,
+              gap: 2,
             }}
           >
             <Box sx={{ ...glassPanel, p: 3 }}>

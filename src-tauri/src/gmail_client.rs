@@ -197,14 +197,21 @@ pub struct GmailClient {
 }
 
 impl GmailClient {
-    /// Autentica via OAuth2 refresh token e retorna um GmailClient pronto
+    /// Autentica via OAuth2 refresh token e retorna um GmailClient pronto.
+    /// Agora aceita opcionalmente um refresh token já resolvido (do AuthState).
     pub async fn authenticate() -> Result<Self, String> {
         let client_id = std::env::var("GOOGLE_CLIENT_ID")
             .map_err(|_| "GOOGLE_CLIENT_ID não definido".to_string())?;
         let client_secret = std::env::var("GOOGLE_CLIENT_SECRET")
             .map_err(|_| "GOOGLE_CLIENT_SECRET não definido".to_string())?;
-        let refresh_token = resolve_google_refresh_token()
-            .ok_or_else(|| "GOOGLE_REFRESH_TOKEN não definido (ou vazio).".to_string())?;
+
+        // Tenta token do AuthState (login) primeiro, depois fallback env var
+        let refresh_token = {
+            let auth = crate::google_auth::get_global_auth_state();
+            let guard = auth.lock().await;
+            guard.get_refresh_token()
+        }
+        .ok_or_else(|| "Nenhum token de autenticação encontrado. Faça login com sua conta Google.".to_string())?;
 
         let http = reqwest::Client::new();
 

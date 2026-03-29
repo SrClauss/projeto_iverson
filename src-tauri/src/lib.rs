@@ -15,6 +15,7 @@ mod db;
 mod email_watcher;
 mod gemini_client;
 mod gmail_client;
+mod google_auth;
 
 #[derive(Debug, Serialize)]
 struct GmailInboxStatus {
@@ -426,8 +427,14 @@ async fn get_gmail_inbox_status() -> Result<GmailInboxStatus, String> {
         .map_err(|_| "GOOGLE_CLIENT_ID não definido".to_string())?;
     let client_secret = std::env::var("GOOGLE_CLIENT_SECRET")
         .map_err(|_| "GOOGLE_CLIENT_SECRET não definido".to_string())?;
-    let refresh_token = resolve_google_refresh_token()
-        .ok_or_else(|| "GOOGLE_REFRESH_TOKEN não definido (ou vazio).".to_string())?;
+
+    // Usar token do auth state (login) com fallback para env var
+    let refresh_token = {
+        let auth = google_auth::get_global_auth_state();
+        let guard = auth.lock().await;
+        guard.get_refresh_token()
+    }
+    .ok_or_else(|| "Nenhum token de autenticação. Faça login com sua conta Google.".to_string())?;
 
     let http = reqwest::Client::new();
 
@@ -820,18 +827,15 @@ async fn get_dashboard_alertas(limit: u32) -> Result<Vec<DashboardAlertaItem>, S
 
 #[tauri::command]
 fn set_tray_divergencias(app: tauri::AppHandle, count: u32) -> Result<String, String> {
-    let title = if count == 0 {
+    let tooltip = if count == 0 {
         "iverson-app".to_string()
     } else {
-        format!("Divergências: {}", count)
+        format!("iverson-app - {} divergências", count)
     };
 
-    if let Err(e) = app.tray_handle().set_title(Some(&title)) {
-        eprintln!("[Tray] Falha ao atualizar título do tray: {}", e);
-    }
-
-    if let Err(e) = app.tray_handle().set_tooltip(Some(format!("{} divergências", count))) {
-        eprintln!("[Tray] Falha ao atualizar tooltip do tray: {}", e);
+    // Em Tauri 2, iteramos sobre os tray icons disponíveis
+    if let Some(tray) = app.tray_by_id("main") {
+        let _ = tray.set_tooltip(Some(&tooltip));
     }
 
     Ok("ok".to_string())
@@ -1534,6 +1538,50 @@ async fn filter_orcamentos_by(filter: String, value: String) -> Result<Vec<Orcam
     }
 }
 
+// ── Google Auth commands ───────────────────────────────────────
+
+#[tauri::command]
+async fn google_auth_get_status() -> Result<google_auth::AuthStatus, String> {
+    let auth = google_auth::get_global_auth_state();
+    let guard = auth.lock().await;
+    Ok(guard.status())
+}
+
+#[tauri::command]
+async fn google_auth_start_login() -> Result<String, String> {
+    // 1. Gerar URL de autorização
+    let auth_url = google_auth::build_auth_url()?;
+
+    // 2. Abrir no navegador padrão
+    open::that(&auth_url)
+        .map_err(|e| format!("Erro ao abrir navegador: {}", e))?;
+
+    // 3. Aguardar callback com o code
+    let code = google_auth::wait_for_auth_code().await?;
+
+    // 4. Trocar code por tokens
+    let stored_token = google_auth::exchange_code_for_tokens(&code).await?;
+
+    let email = stored_token.email.clone().unwrap_or_else(|| "desconhecido".to_string());
+
+    // 5. Salvar no estado global
+    {
+        let auth = google_auth::get_global_auth_state();
+        let mut guard = auth.lock().await;
+        guard.set_token(stored_token);
+    }
+
+    Ok(format!("Login realizado com sucesso: {}", email))
+}
+
+#[tauri::command]
+async fn google_auth_logout() -> Result<String, String> {
+    let auth = google_auth::get_global_auth_state();
+    let mut guard = auth.lock().await;
+    guard.clear();
+    Ok("Logout realizado. Token removido.".to_string())
+}
+
 // ── Watcher commands ──────────────────────────────────────────
 
 #[tauri::command]
@@ -1709,6 +1757,25 @@ async fn descartar_email(email_id: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+async fn excluir_orcamento(orcamento_id: String) -> Result<String, String> {
+    let database = db::get_database().await?;
+    let orcamento_oid = mongodb::bson::oid::ObjectId::parse_str(&orcamento_id)
+        .map_err(|e| format!("ID de orçamento inválido: {}", e))?;
+
+    let delete_result = database
+        .orcamentos
+        .delete_one(mongodb::bson::doc! { "_id": orcamento_oid })
+        .await
+        .map_err(|e| format!("Erro ao excluir orçamento: {}", e))?;
+
+    if delete_result.deleted_count == 0 {
+        return Err("Orçamento não encontrado".to_string());
+    }
+
+    Ok("Orçamento excluído com sucesso".to_string())
+}
+
+#[tauri::command]
 async fn excluir_email(email_id: String) -> Result<String, String> {
     let database = db::get_database().await?;
     let email_oid = mongodb::bson::oid::ObjectId::parse_str(&email_id)
@@ -1729,7 +1796,9 @@ async fn excluir_email(email_id: String) -> Result<String, String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    dotenv::dotenv().ok();
+    // Carrega explicitamente do src-tauri/.env independente do cwd
+    let env_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".env");
+    dotenv::from_path(&env_path).ok();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -1762,8 +1831,12 @@ pub fn run() {
             get_emails_pendentes,
             associar_email_a_orcamento,
             descartar_email,
+            excluir_orcamento,
             excluir_email,
-            set_tray_divergencias
+            set_tray_divergencias,
+            google_auth_get_status,
+            google_auth_start_login,
+            google_auth_logout
         ])
         .setup(|app| {
             // Watcher state management
@@ -1773,7 +1846,7 @@ pub fn run() {
             let quit_item = MenuItem::with_id(app, "quit", "Sair", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
 
-            let _tray = TrayIconBuilder::new()
+            let _tray = TrayIconBuilder::with_id("main")
                 .icon(app.default_window_icon().unwrap().clone())
                 .menu(&menu)
                 .tooltip("iverson-app")
