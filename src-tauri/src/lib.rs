@@ -148,8 +148,8 @@ struct TransportadoraMetricas {
 #[derive(Debug, Serialize)]
 struct PropostaDetalheItem {
     id: String,
-    valor_proposta: i32,
-    valor_frete_pago: Option<i32>,
+    valor_proposta: f64,
+    valor_frete_pago: Option<f64>,
     prazo_entrega: Option<String>,
     transportadora_id: Option<String>,
     transportadora_nome: Option<String>,
@@ -164,6 +164,7 @@ struct OrcamentoDetalheItem {
     ativo: bool,
     proposta_ganhadora_id: Option<String>,
     propostas: Vec<PropostaDetalheItem>,
+    divergencia_tratada: bool,
 }
 
 fn status_orcamento(orcamento: &db::models::Orcamento) -> String {
@@ -283,6 +284,7 @@ async fn map_orcamento_to_detalhe(
         ativo: orcamento.ativo,
         proposta_ganhadora_id: orcamento.proposta_ganhadora_id,
         propostas,
+        divergencia_tratada: orcamento.divergencia_tratada,
     })
 }
 
@@ -635,7 +637,7 @@ async fn get_dashboard_stats() -> Result<DashboardStats, String> {
             .filter(|proposta| {
                 proposta
                     .valor_frete_pago
-                    .map(|valor_frete_pago| valor_frete_pago != proposta.valor_proposta)
+                    .map(|valor_frete_pago| (valor_frete_pago - proposta.valor_proposta).abs() > f64::EPSILON)
                     .unwrap_or(false)
             })
             .count() as u32;
@@ -796,7 +798,7 @@ async fn get_dashboard_alertas(limit: u32) -> Result<Vec<DashboardAlertaItem>, S
                 continue;
             };
 
-            if valor_frete_pago == proposta.valor_proposta {
+            if (valor_frete_pago - proposta.valor_proposta).abs() < f64::EPSILON {
                 continue;
             }
 
@@ -861,13 +863,13 @@ async fn get_transportadora_metricas(transportadora_id: String) -> Result<Transp
                 continue;
             }
             total_transacoes = total_transacoes.saturating_add(1);
-            soma_proposta += proposta.valor_proposta as f64;
+            soma_proposta += proposta.valor_proposta;
 
             if let Some(frete_pago) = proposta.valor_frete_pago {
                 count_frete_pago = count_frete_pago.saturating_add(1);
-                soma_frete_pago += frete_pago as f64;
-                let diff = (frete_pago - proposta.valor_proposta).unsigned_abs() as f64;
-                if frete_pago != proposta.valor_proposta {
+                soma_frete_pago += frete_pago;
+                let diff = (frete_pago - proposta.valor_proposta).abs();
+                if (frete_pago - proposta.valor_proposta).abs() > f64::EPSILON {
                     transacoes_com_divergencia = transacoes_com_divergencia.saturating_add(1);
                     soma_divergencia += diff;
                 }
@@ -881,21 +883,21 @@ async fn get_transportadora_metricas(transportadora_id: String) -> Result<Transp
         0.0
     };
 
-    // Values are stored in centavos, divide by 100 for display
+    // Values are already stored in reais (f64), no conversion needed
     let valor_medio_proposta = if total_transacoes > 0 {
-        (soma_proposta / total_transacoes as f64) / 100.0
+        soma_proposta / total_transacoes as f64
     } else {
         0.0
     };
 
     let valor_medio_frete_pago = if count_frete_pago > 0 {
-        (soma_frete_pago / count_frete_pago as f64) / 100.0
+        soma_frete_pago / count_frete_pago as f64
     } else {
         0.0
     };
 
     let divergencia_media = if transacoes_com_divergencia > 0 {
-        (soma_divergencia / transacoes_com_divergencia as f64) / 100.0
+        soma_divergencia / transacoes_com_divergencia as f64
     } else {
         0.0
     };
@@ -908,6 +910,266 @@ async fn get_transportadora_metricas(transportadora_id: String) -> Result<Transp
         valor_medio_frete_pago,
         divergencia_media,
     })
+}
+
+#[derive(Debug, Serialize)]
+struct NotificacaoItem {
+    id: String,
+    orcamento_id: String,
+    orcamento_descricao: String,
+    mensagem: String,
+    lida: bool,
+    criada_em: String,
+}
+
+#[tauri::command]
+async fn marcar_divergencia_tratada(orcamento_id: String, tratada: bool) -> Result<(), String> {
+    let database = db::get_database().await?;
+    let oid = mongodb::bson::oid::ObjectId::parse_str(&orcamento_id)
+        .map_err(|e| format!("ID inválido: {}", e))?;
+
+    database
+        .orcamentos
+        .update_one(
+            mongodb::bson::doc! { "_id": oid },
+            mongodb::bson::doc! { "$set": { "divergencia_tratada": tratada } },
+        )
+        .await
+        .map_err(|e| format!("Erro ao atualizar divergencia_tratada: {}", e))?;
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn migrar_divergencia_tratada() -> Result<u32, String> {
+    let database = db::get_database().await?;
+
+    let mut cursor = database
+        .orcamentos
+        .find(mongodb::bson::doc! {})
+        .await
+        .map_err(|e| format!("Erro ao buscar orçamentos: {}", e))?;
+
+    let mut atualizados: u32 = 0;
+
+    while cursor
+        .advance()
+        .await
+        .map_err(|e| format!("Erro cursor: {}", e))?
+    {
+        let orc: db::models::Orcamento = cursor
+            .deserialize_current()
+            .map_err(|e| format!("Erro desserializar: {}", e))?;
+
+        let orc_id = match orc.id {
+            Some(id) => id,
+            None => continue,
+        };
+
+        // Verificar se tem divergência real (frete pago diferente da proposta ganhadora)
+        let tem_divergencia = if let Some(ref ganhadora_id) = orc.proposta_ganhadora_id {
+            orc.propostas.iter().any(|p| {
+                p.id.as_deref() == Some(ganhadora_id.as_str())
+                    && p.valor_frete_pago
+                        .map(|pago| (pago - p.valor_proposta).abs() > 0.001)
+                        .unwrap_or(false)
+            })
+        } else {
+            false
+        };
+
+        // tratada = true se NÃO há divergência; false se há
+        let tratada = !tem_divergencia;
+
+        database
+            .orcamentos
+            .update_one(
+                mongodb::bson::doc! { "_id": orc_id },
+                mongodb::bson::doc! { "$set": { "divergencia_tratada": tratada } },
+            )
+            .await
+            .map_err(|e| format!("Erro ao atualizar: {}", e))?;
+
+        atualizados += 1;
+    }
+
+    Ok(atualizados)
+}
+
+#[tauri::command]
+async fn sync_notificacoes_divergencias() -> Result<u32, String> {
+    let database = db::get_database().await?;
+
+    let mut cursor_notif = database
+        .notificacoes
+        .find(mongodb::bson::doc! {})
+        .await
+        .map_err(|e| format!("Erro ao buscar notificacoes: {}", e))?;
+
+    let mut orcamentos_com_notif: std::collections::HashSet<String> = std::collections::HashSet::new();
+    while cursor_notif
+        .advance()
+        .await
+        .map_err(|e| format!("Erro cursor notificacoes: {}", e))?
+    {
+        let n: db::models::Notificacao = cursor_notif
+            .deserialize_current()
+            .map_err(|e| format!("Erro desserializar: {}", e))?;
+        orcamentos_com_notif.insert(n.orcamento_id.to_hex());
+    }
+
+    let mut cursor_orc = database
+        .orcamentos
+        .find(mongodb::bson::doc! { "ativo": true })
+        .await
+        .map_err(|e| format!("Erro ao buscar orcamentos: {}", e))?;
+
+    let mut criadas: u32 = 0;
+    let agora = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+
+    while cursor_orc
+        .advance()
+        .await
+        .map_err(|e| format!("Erro cursor orcamentos: {}", e))?
+    {
+        let orc: db::models::Orcamento = cursor_orc
+            .deserialize_current()
+            .map_err(|e| format!("Erro desserializar: {}", e))?;
+
+        let orc_id = match orc.id {
+            Some(id) => id,
+            None => continue,
+        };
+
+        if orcamentos_com_notif.contains(&orc_id.to_hex()) {
+            continue;
+        }
+
+        for proposta in &orc.propostas {
+            let Some(pago) = proposta.valor_frete_pago else {
+                continue;
+            };
+            if (pago - proposta.valor_proposta).abs() < f64::EPSILON {
+                continue;
+            }
+            let notif = db::models::Notificacao {
+                id: None,
+                orcamento_id: orc_id,
+                orcamento_descricao: orc.descricao.clone(),
+                mensagem: format!(
+                    "Divergencia de nota detectada: frete pago R$ {:.2} vs proposta R$ {:.2}",
+                    pago,
+                    proposta.valor_proposta
+                ),
+                lida: false,
+                criada_em: agora.clone(),
+            };
+            let _ = database.notificacoes.insert_one(notif).await;
+            orcamentos_com_notif.insert(orc_id.to_hex());
+            criadas += 1;
+            break;
+        }
+    }
+
+    Ok(criadas)
+}
+
+#[tauri::command]
+async fn get_notificacoes() -> Result<Vec<NotificacaoItem>, String> {
+    let database = db::get_database().await?;
+
+    // Buscar IDs dos orçamentos ativos
+    let mut cursor_orc = database
+        .orcamentos
+        .find(mongodb::bson::doc! { "ativo": true })
+        .await
+        .map_err(|e| format!("Erro ao buscar orçamentos: {}", e))?;
+
+    let mut orcamentos_ativos_ids: Vec<mongodb::bson::oid::ObjectId> = Vec::new();
+    while cursor_orc
+        .advance()
+        .await
+        .map_err(|e| format!("Erro cursor orçamentos: {}", e))?
+    {
+        let orc: db::models::Orcamento = cursor_orc
+            .deserialize_current()
+            .map_err(|e| format!("Erro desserializar: {}", e))?;
+        if let Some(id) = orc.id {
+            orcamentos_ativos_ids.push(id);
+        }
+    }
+
+    if orcamentos_ativos_ids.is_empty() {
+        return Ok(vec![]);
+    }
+
+    // Buscar notificações apenas dos orçamentos ativos, mais recentes primeiro
+    let options = mongodb::options::FindOptions::builder()
+        .sort(mongodb::bson::doc! { "criada_em": -1 })
+        .build();
+
+    let mut cursor = database
+        .notificacoes
+        .find(mongodb::bson::doc! {
+            "orcamento_id": { "$in": &orcamentos_ativos_ids }
+        })
+        .with_options(options)
+        .await
+        .map_err(|e| format!("Erro ao buscar notificações: {}", e))?;
+
+    let mut items: Vec<NotificacaoItem> = Vec::new();
+    while cursor
+        .advance()
+        .await
+        .map_err(|e| format!("Erro cursor notificações: {}", e))?
+    {
+        let n: db::models::Notificacao = cursor
+            .deserialize_current()
+            .map_err(|e| format!("Erro desserializar notificação: {}", e))?;
+        items.push(NotificacaoItem {
+            id: n.id.map(|oid| oid.to_hex()).unwrap_or_default(),
+            orcamento_id: n.orcamento_id.to_hex(),
+            orcamento_descricao: n.orcamento_descricao,
+            mensagem: n.mensagem,
+            lida: n.lida,
+            criada_em: n.criada_em,
+        });
+    }
+
+    Ok(items)
+}
+
+#[tauri::command]
+async fn marcar_notificacao_lida(notificacao_id: String) -> Result<(), String> {
+    let database = db::get_database().await?;
+    let oid = mongodb::bson::oid::ObjectId::parse_str(&notificacao_id)
+        .map_err(|e| format!("ID inválido: {}", e))?;
+
+    database
+        .notificacoes
+        .update_one(
+            mongodb::bson::doc! { "_id": oid },
+            mongodb::bson::doc! { "$set": { "lida": true } },
+        )
+        .await
+        .map_err(|e| format!("Erro ao marcar lida: {}", e))?;
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn excluir_notificacao(notificacao_id: String) -> Result<(), String> {
+    let database = db::get_database().await?;
+    let oid = mongodb::bson::oid::ObjectId::parse_str(&notificacao_id)
+        .map_err(|e| format!("ID inválido: {}", e))?;
+
+    database
+        .notificacoes
+        .delete_one(mongodb::bson::doc! { "_id": oid })
+        .await
+        .map_err(|e| format!("Erro ao excluir notificação: {}", e))?;
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -1115,7 +1377,7 @@ async fn update_orcamento_basico(
 #[tauri::command]
 async fn add_proposta_manual(
     orcamento_id: String,
-    valor_proposta: i32,
+    valor_proposta: f64,
     transportadora_id: String,
     data_proposta: String,
     prazo_entrega: String,
@@ -1671,12 +1933,13 @@ async fn google_auth_logout() -> Result<String, String> {
 
 #[tauri::command]
 async fn start_email_watcher(
+    app: tauri::AppHandle,
     watcher: State<'_, Arc<email_watcher::EmailWatcher>>,
 ) -> Result<String, String> {
     if watcher.is_running() {
         return Ok("Watcher já está rodando".to_string());
     }
-    watcher.start();
+    watcher.start(app);
     Ok("Watcher iniciado".to_string())
 }
 
@@ -1784,7 +2047,7 @@ async fn associar_email_a_orcamento(
         let hoje = chrono::Utc::now().format("%Y-%m-%d").to_string();
         let proposta = db::models::Proposta {
             id: Some(mongodb::bson::oid::ObjectId::new().to_hex()),
-            valor_proposta: valor,
+            valor_proposta: valor as f64 / 100.0,
             valor_frete_pago: None,
             prazo_entrega: email.prazo_extraido.clone().or(Some("Via email".to_string())),
             transportadora_id: Some(email.transportadora_id),
@@ -1922,7 +2185,13 @@ pub fn run() {
             get_transportadora_metricas,
             google_auth_get_status,
             google_auth_start_login,
-            google_auth_logout
+            google_auth_logout,
+            get_notificacoes,
+            marcar_notificacao_lida,
+            excluir_notificacao,
+            sync_notificacoes_divergencias,
+            marcar_divergencia_tratada,
+            migrar_divergencia_tratada
         ])
         .setup(|app| {
             // Watcher state management

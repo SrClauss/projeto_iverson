@@ -5,6 +5,10 @@ fn default_true() -> bool {
     true
 }
 
+fn default_false() -> bool {
+    false
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Transportadora {
     #[serde(rename = "_id", skip_serializing_if = "Option::is_none")]
@@ -30,6 +34,9 @@ pub struct Orcamento {
     pub transportadora_id: Option<ObjectId>,
     #[serde(default)]
     pub proposta_ganhadora_id: Option<String>,
+    /// true = sem divergência pendente ou divergência já tratada; false = divergência aberta
+    #[serde(default = "default_false")]
+    pub divergencia_tratada: bool,
 }
 
 impl Orcamento {
@@ -67,8 +74,8 @@ impl Orcamento {
 pub struct Proposta {
     #[serde(default)]
     pub id: Option<String>,
-    pub valor_proposta: i32,
-    pub valor_frete_pago: Option<i32>,
+    pub valor_proposta: f64,
+    pub valor_frete_pago: Option<f64>,
     pub prazo_entrega: Option<String>,
     pub transportadora_id: Option<ObjectId>,
     pub data_proposta: String,
@@ -120,6 +127,25 @@ pub struct EmailProcessado {
     /// Prazo extraído (para cotações)
     #[serde(default)]
     pub prazo_extraido: Option<String>,
+}
+
+// ── Notificacao ──────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Notificacao {
+    #[serde(rename = "_id", skip_serializing_if = "Option::is_none")]
+    pub id: Option<ObjectId>,
+    /// ID do orçamento relacionado
+    pub orcamento_id: ObjectId,
+    /// Descrição do orçamento (para exibição)
+    pub orcamento_descricao: String,
+    /// Mensagem descrevendo a divergência
+    pub mensagem: String,
+    /// Se o usuário já leu
+    #[serde(default)]
+    pub lida: bool,
+    /// Timestamp ISO de criação
+    pub criada_em: String,
 }
 
 // ── Watcher State ────────────────────────────────────────────

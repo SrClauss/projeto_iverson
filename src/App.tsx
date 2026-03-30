@@ -56,6 +56,7 @@ import {
   Warning as WarningAmberIcon,
 } from '@mui/icons-material';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import glassBackground from './assets/glass-background-bordeaux.svg';
 import './App.css';
 
@@ -123,6 +124,7 @@ type OrcamentoDetalhe = {
   ativo: boolean;
   proposta_ganhadora_id?: string | null;
   propostas: PropostaDetalhe[];
+  divergencia_tratada: boolean;
 };
 
 type GoogleAuthStatus = {
@@ -147,6 +149,15 @@ type EmailPendente = {
   valor_extraido: number | null;
   processado_em: string;
   status: string;
+};
+
+type Notificacao = {
+  id: string;
+  orcamento_id: string;
+  orcamento_descricao: string;
+  mensagem: string;
+  lida: boolean;
+  criada_em: string;
 };
 
 // Estilo Glass (Glassmorphism)
@@ -251,6 +262,7 @@ const App = () => {
 
   // ── Notification State ──────────────────────────────────
   const [notifAnchorEl, setNotifAnchorEl] = useState<HTMLElement | null>(null);
+  const [notificacoes, setNotificacoes] = useState<Notificacao[]>([]);
 
   // ── Divergência State ───────────────────────────────────
   const [divergenciaAtual, setDivergenciaAtual] = useState<DashboardAlertaItem | null>(null);
@@ -283,16 +295,32 @@ const App = () => {
     loadDashboard();
   }, []);
 
+  // ============ Listener de mudança no banco (watcher) ============
+  useEffect(() => {
+    const unlisten = listen('db-changed', () => {
+      loadDashboard();
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, []);
+
   const loadDashboard = async (includeInactive?: boolean) => {
     setLoading(true);
     setError(null);
     const inactive = includeInactive ?? mostrarInativos;
 
     try {
-      const [statsData, orcamentosData, alertasData] = await Promise.all([
+      // Sincronizar notificações de divergências existentes (sem bloquear)
+      invoke('sync_notificacoes_divergencias').catch(() => {});
+      // Migrar campo divergencia_tratada p/ registros antigos
+      invoke('migrar_divergencia_tratada').catch(() => {});
+
+      const [statsData, orcamentosData, alertasData, notificacoesData] = await Promise.all([
         invoke<DashboardStats>('get_dashboard_stats'),
         invoke<OrcamentoRecenteItem[]>('get_orcamentos_recentes', { limit: inactive ? 50 : 4, includeInactive: inactive }),
         invoke<DashboardAlertaItem[]>('get_dashboard_alertas', { limit: 20 }),
+        invoke<Notificacao[]>('get_notificacoes'),
       ]);
 
       const transportadorasData = await invoke<Transportadora[]>('get_transportadoras');
@@ -300,6 +328,7 @@ const App = () => {
       setStats(statsData);
       setOrcamentos(orcamentosData);
       setAlertas(alertasData);
+      setNotificacoes(notificacoesData);
       setTransportadoras(transportadorasData);
       setFiltroAtivoLabel(null);
 
@@ -1169,19 +1198,24 @@ const App = () => {
 
           {/* Top-right: Notification Bell + Google Avatar */}
           <Stack direction="row" spacing={1} alignItems="center">
-            <Tooltip title={`${stats?.divergencias_nota ?? 0} divergência(s) detectada(s)`} arrow>
-              <IconButton
-                onClick={(e) => setNotifAnchorEl(e.currentTarget)}
-                sx={{
-                  color: (stats?.divergencias_nota ?? 0) > 0 ? '#ef4444' : '#64748b',
-                  '&:hover': { bgcolor: 'rgba(239,68,68,0.08)' },
-                }}
-              >
-                <Badge badgeContent={stats?.divergencias_nota ?? 0} color="error" max={99}>
-                  <NotificationsActive />
-                </Badge>
-              </IconButton>
-            </Tooltip>
+            {(() => {
+              const naoLidas = notificacoes.filter((n) => !n.lida).length;
+              return (
+                <Tooltip title={naoLidas > 0 ? `${naoLidas} notificação(ões) não lida(s)` : 'Notificações'} arrow>
+                  <IconButton
+                    onClick={(e) => setNotifAnchorEl(e.currentTarget)}
+                    sx={{
+                      color: naoLidas > 0 ? '#ef4444' : '#64748b',
+                      '&:hover': { bgcolor: 'rgba(239,68,68,0.08)' },
+                    }}
+                  >
+                    <Badge badgeContent={naoLidas} color="error" max={99}>
+                      <NotificationsActive />
+                    </Badge>
+                  </IconButton>
+                </Tooltip>
+              );
+            })()}
 
             {googleAuth?.authenticated ? (
               <Tooltip title={googleAuth.email || 'Conta Google conectada'} arrow>
@@ -1221,8 +1255,8 @@ const App = () => {
               sx: {
                 ...glassPanel,
                 borderRadius: '16px',
-                width: 380,
-                maxHeight: 520,
+                width: 400,
+                maxHeight: 560,
                 overflowY: 'auto',
                 mt: 0.5,
               },
@@ -1230,166 +1264,164 @@ const App = () => {
           }}
         >
           <Box sx={{ p: 2 }}>
-            <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1.5 }}>
-              <NotificationsActive sx={{ color: '#ef4444', fontSize: 20 }} />
-              <Typography variant="h6" sx={{ fontWeight: 800, fontSize: '1rem' }}>
-                Notas Recebidas
-              </Typography>
-              {(stats?.divergencias_nota ?? 0) > 0 && (
-                <Chip
-                  label={`${stats?.divergencias_nota} divergência(s)`}
+            <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1.5 }}>
+              <Stack direction="row" alignItems="center" spacing={1}>
+                <NotificationsActive sx={{ color: '#ef4444', fontSize: 20 }} />
+                <Typography variant="h6" sx={{ fontWeight: 800, fontSize: '1rem' }}>
+                  Notificações
+                </Typography>
+                {notificacoes.filter((n) => !n.lida).length > 0 && (
+                  <Chip
+                    label={`${notificacoes.filter((n) => !n.lida).length} não lida(s)`}
+                    size="small"
+                    color="error"
+                    sx={{ fontWeight: 700, fontSize: '0.7rem', height: 20 }}
+                  />
+                )}
+              </Stack>
+              {notificacoes.some((n) => !n.lida) && (
+                <Button
                   size="small"
-                  color="error"
-                  sx={{ fontWeight: 700, fontSize: '0.7rem', height: 20 }}
-                />
+                  sx={{ textTransform: 'none', fontSize: '0.72rem', color: '#64748b' }}
+                  onClick={async () => {
+                    await Promise.all(
+                      notificacoes
+                        .filter((n) => !n.lida)
+                        .map((n) => invoke('marcar_notificacao_lida', { notificacaoId: n.id }))
+                    );
+                    setNotificacoes((prev) => prev.map((n) => ({ ...n, lida: true })));
+                  }}
+                >
+                  Marcar todas como lidas
+                </Button>
               )}
             </Stack>
 
-            {emailsPendentes.filter((ep) => ep.tipo === 'nota').length === 0 ? (
+            {/* Divergências persistidas */}
+            {notificacoes.length === 0 ? (
               <Typography variant="body2" color="text.secondary" sx={{ py: 2, textAlign: 'center' }}>
-                Nenhuma nota fiscal recebida ainda.
+                Nenhuma notificação.
               </Typography>
             ) : (
-              <Stack spacing={1}>
-                {emailsPendentes
-                  .filter((ep) => ep.tipo === 'nota')
-                  .map((ep) => {
-                    const temDivergencia = alertas.some(
-                      (a) => a.transportadora === ep.transportadora_nome
-                    );
-                    const alertaRelacionado = alertas.find(
-                      (a) => a.transportadora === ep.transportadora_nome
-                    );
-                    return (
-                      <Box
-                        key={ep.id}
-                        sx={{
-                          p: 1.5,
-                          borderRadius: '10px',
-                          bgcolor: temDivergencia
-                            ? 'rgba(239,68,68,0.08)'
-                            : 'rgba(34,197,94,0.05)',
-                          border: `1px solid ${temDivergencia ? 'rgba(239,68,68,0.25)' : 'rgba(34,197,94,0.15)'}`,
-                        }}
-                      >
-                        <Stack direction="row" spacing={1} alignItems="flex-start">
-                          <Box
-                            sx={{
-                              mt: 0.25,
-                              color: temDivergencia ? '#ef4444' : '#22c55e',
-                              flexShrink: 0,
-                            }}
-                          >
-                            {temDivergencia ? (
-                              <WarningAmberIcon sx={{ fontSize: 18 }} />
-                            ) : (
-                              <CheckCircle sx={{ fontSize: 18 }} />
-                            )}
-                          </Box>
-                          <Box sx={{ flex: 1, minWidth: 0 }}>
-                            <Typography
-                              variant="body2"
-                              sx={{
-                                fontWeight: 700,
-                                color: temDivergencia ? '#991b1b' : '#0f172a',
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis',
-                                whiteSpace: 'nowrap',
-                              }}
-                            >
-                              {ep.transportadora_nome}
-                            </Typography>
-                            <Typography
-                              variant="caption"
-                              color="text.secondary"
-                              display="block"
-                              sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                            >
-                              {ep.assunto || 'Sem assunto'}
-                            </Typography>
-                            {ep.valor_extraido != null && (
-                              <Typography variant="caption" display="block" sx={{ color: '#64748b' }}>
-                                R$ {(ep.valor_extraido / 100).toFixed(2)}
-                              </Typography>
-                            )}
-                            {temDivergencia && alertaRelacionado && (
-                              <Typography
-                                variant="caption"
-                                display="block"
-                                sx={{ color: '#ef4444', fontWeight: 600, mt: 0.25 }}
-                              >
-                                ⚠ {alertaRelacionado.msg}
-                              </Typography>
-                            )}
-                          </Box>
-                          {temDivergencia && alertaRelacionado && (
-                            <Button
-                              size="small"
-                              variant="outlined"
-                              color="error"
-                              onClick={() => handleResolverDivergencia(alertaRelacionado)}
-                              sx={{
-                                textTransform: 'none',
-                                fontSize: '0.68rem',
-                                borderRadius: '8px',
-                                flexShrink: 0,
-                                py: 0.25,
-                                px: 1,
-                                minWidth: 'auto',
-                              }}
-                            >
-                              Resolver
-                            </Button>
-                          )}
-                        </Stack>
+              <Stack spacing={0.75}>
+                {notificacoes.map((notif) => (
+                  <Box
+                    key={notif.id}
+                    sx={{
+                      p: 1.5,
+                      borderRadius: '10px',
+                      bgcolor: notif.lida ? 'rgba(0,0,0,0.02)' : 'rgba(239,68,68,0.07)',
+                      border: `1px solid ${notif.lida ? 'rgba(0,0,0,0.06)' : 'rgba(239,68,68,0.22)'}`,
+                      opacity: notif.lida ? 0.7 : 1,
+                    }}
+                  >
+                    <Stack direction="row" spacing={1} alignItems="flex-start">
+                      <WarningAmberIcon
+                        sx={{ fontSize: 18, color: notif.lida ? '#94a3b8' : '#ef4444', mt: 0.25, flexShrink: 0 }}
+                      />
+                      <Box sx={{ flex: 1, minWidth: 0 }}>
+                        <Typography
+                          variant="caption"
+                          sx={{
+                            fontWeight: 700,
+                            color: notif.lida ? '#64748b' : '#991b1b',
+                            display: 'block',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          {notif.orcamento_descricao}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary" display="block">
+                          {notif.mensagem}
+                        </Typography>
+                        <Typography variant="caption" sx={{ color: '#94a3b8', fontSize: '0.65rem' }}>
+                          {new Date(notif.criada_em).toLocaleString('pt-BR')}
+                        </Typography>
                       </Box>
-                    );
-                  })}
+                      <Stack direction="row" spacing={0.5} flexShrink={0}>
+                        {!notif.lida && (
+                          <Tooltip title="Marcar como lida" arrow>
+                            <IconButton
+                              size="small"
+                              onClick={async () => {
+                                await invoke('marcar_notificacao_lida', { notificacaoId: notif.id });
+                                setNotificacoes((prev) =>
+                                  prev.map((n) => (n.id === notif.id ? { ...n, lida: true } : n))
+                                );
+                              }}
+                              sx={{ color: '#22c55e', p: 0.25 }}
+                            >
+                              <CheckCircle sx={{ fontSize: 16 }} />
+                            </IconButton>
+                          </Tooltip>
+                        )}
+                        <Tooltip title="Excluir" arrow>
+                          <IconButton
+                            size="small"
+                            onClick={async () => {
+                              await invoke('excluir_notificacao', { notificacaoId: notif.id });
+                              setNotificacoes((prev) => prev.filter((n) => n.id !== notif.id));
+                            }}
+                            sx={{ color: '#ef4444', p: 0.25 }}
+                          >
+                            <Delete sx={{ fontSize: 16 }} />
+                          </IconButton>
+                        </Tooltip>
+                      </Stack>
+                    </Stack>
+                  </Box>
+                ))}
               </Stack>
             )}
 
-            {alertas.length > 0 && (
+            {/* Seção de notas recebidas por email */}
+            {emailsPendentes.filter((ep) => ep.tipo === 'nota').length > 0 && (
               <>
                 <Divider sx={{ my: 1.5 }} />
                 <Typography variant="caption" sx={{ fontWeight: 700, color: '#94a3b8', display: 'block', mb: 1 }}>
-                  DIVERGÊNCIAS ABERTAS ({alertas.length})
+                  ÚLTIMAS NOTAS RECEBIDAS
                 </Typography>
                 <Stack spacing={0.75}>
-                  {alertas.map((alerta) => (
-                    <Stack
-                      key={alerta.id}
-                      direction="row"
-                      alignItems="center"
-                      justifyContent="space-between"
-                      sx={{
-                        p: 1,
-                        borderRadius: '8px',
-                        bgcolor: 'rgba(239,68,68,0.06)',
-                        border: '1px solid rgba(239,68,68,0.15)',
-                      }}
-                    >
-                      <Box sx={{ flex: 1, minWidth: 0 }}>
-                        <Typography variant="caption" sx={{ fontWeight: 700, color: '#991b1b', display: 'block' }}>
-                          {alerta.transportadora}
-                        </Typography>
-                        <Typography
-                          variant="caption"
-                          color="text.secondary"
-                          sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}
+                  {emailsPendentes
+                    .filter((ep) => ep.tipo === 'nota')
+                    .slice(0, 5)
+                    .map((ep) => {
+                      const alertaRelacionado = alertas.find(
+                        (a) => a.transportadora === ep.transportadora_nome
+                      );
+                      return (
+                        <Stack
+                          key={ep.id}
+                          direction="row"
+                          alignItems="center"
+                          spacing={1}
+                          sx={{
+                            p: 1,
+                            borderRadius: '8px',
+                            bgcolor: alertaRelacionado ? 'rgba(239,68,68,0.05)' : 'rgba(34,197,94,0.04)',
+                            border: `1px solid ${alertaRelacionado ? 'rgba(239,68,68,0.15)' : 'rgba(34,197,94,0.12)'}`,
+                          }}
                         >
-                          {alerta.msg}
-                        </Typography>
-                      </Box>
-                      <Button
-                        size="small"
-                        color="error"
-                        onClick={() => handleResolverDivergencia(alerta)}
-                        sx={{ textTransform: 'none', fontSize: '0.68rem', flexShrink: 0, minWidth: 'auto' }}
-                      >
-                        Ver
-                      </Button>
-                    </Stack>
-                  ))}
+                          {alertaRelacionado ? (
+                            <WarningAmberIcon sx={{ fontSize: 15, color: '#ef4444', flexShrink: 0 }} />
+                          ) : (
+                            <CheckCircle sx={{ fontSize: 15, color: '#22c55e', flexShrink: 0 }} />
+                          )}
+                          <Box sx={{ flex: 1, minWidth: 0 }}>
+                            <Typography variant="caption" sx={{ fontWeight: 700, display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {ep.transportadora_nome}
+                            </Typography>
+                            {ep.valor_extraido != null && (
+                              <Typography variant="caption" sx={{ color: '#64748b' }}>
+                                R$ {(ep.valor_extraido / 100).toFixed(2)}
+                              </Typography>
+                            )}
+                          </Box>
+                        </Stack>
+                      );
+                    })}
                 </Stack>
               </>
             )}
@@ -2411,6 +2443,26 @@ const App = () => {
                         sx={{ fontWeight: 700 }}
                       />
                     </Stack>
+                    <Stack direction="row" justifyContent="space-between" alignItems="center">
+                      <Typography variant="body2" color="text.secondary">Divergência</Typography>
+                      <Chip
+                        label={orcamentoDetalhe.divergencia_tratada ? 'Tratada' : 'Pendente'}
+                        size="small"
+                        color={orcamentoDetalhe.divergencia_tratada ? 'success' : 'error'}
+                        sx={{ fontWeight: 700, cursor: 'pointer' }}
+                        onClick={async () => {
+                          const novoValor = !orcamentoDetalhe.divergencia_tratada;
+                          await invoke('marcar_divergencia_tratada', {
+                            orcamentoId: orcamentoDetalhe.id,
+                            tratada: novoValor,
+                          });
+                          setOrcamentoDetalhe((prev) =>
+                            prev ? { ...prev, divergencia_tratada: novoValor } : prev
+                          );
+                          await loadDashboard();
+                        }}
+                      />
+                    </Stack>
                     <Divider />
                     <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#475569' }}>
                       PROPOSTAS
@@ -2440,9 +2492,9 @@ const App = () => {
                                 {proposta.transportadora_nome ?? 'Transportadora não informada'}
                               </Typography>
                               <Typography variant="caption" display="block" color="text.secondary">
-                                Proposta: R$ {proposta.valor_proposta}
+                                Proposta: R$ {Number(proposta.valor_proposta).toFixed(2)}
                                 {proposta.valor_frete_pago != null && (
-                                  <> · Nota: R$ {proposta.valor_frete_pago}</>
+                                  <> · Nota: R$ {Number(proposta.valor_frete_pago).toFixed(2)}</>
                                 )}
                               </Typography>
                             </Box>
@@ -2772,10 +2824,10 @@ const App = () => {
                                 {item.transportadora_nome ?? 'Não informada'}
                               </TableCell>
                               <TableCell sx={{ borderBottom: '1px solid rgba(0,0,0,0.05)' }}>
-                                R$ {item.valor_proposta}
+                                R$ {Number(item.valor_proposta).toFixed(2)}
                               </TableCell>
                               <TableCell sx={{ borderBottom: '1px solid rgba(0,0,0,0.05)' }}>
-                                {item.valor_frete_pago != null ? `R$ ${item.valor_frete_pago}` : '-'}
+                                {item.valor_frete_pago != null ? `R$ ${Number(item.valor_frete_pago).toFixed(2)}` : '-'}
                               </TableCell>
                               <TableCell sx={{ borderBottom: '1px solid rgba(0,0,0,0.05)' }}>
                                 {item.data_proposta}

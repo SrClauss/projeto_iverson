@@ -45,6 +45,7 @@ pub struct Database {
     pub orcamentos: Collection<models::Orcamento>,
     pub emails_processados: Collection<models::EmailProcessado>,
     pub watcher_state: Collection<models::WatcherState>,
+    pub notificacoes: Collection<models::Notificacao>,
 }
 
 impl Database {
@@ -57,6 +58,7 @@ impl Database {
             orcamentos: db.collection("orcamentos"),
             emails_processados: db.collection("emails_processados"),
             watcher_state: db.collection("watcher_state"),
+            notificacoes: db.collection("notificacoes"),
         })
     }
 }

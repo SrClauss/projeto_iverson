@@ -8,6 +8,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use tauri::Emitter;
 use tokio::sync::Mutex;
 
 /// Intervalo de polling em segundos
@@ -43,7 +44,7 @@ impl EmailWatcher {
         }
     }
 
-    pub fn start(&self) {
+    pub fn start(&self, app: tauri::AppHandle) {
         if self.is_running.load(Ordering::SeqCst) {
             return; // Já rodando
         }
@@ -80,6 +81,8 @@ impl EmailWatcher {
                         eprintln!("[EmailWatcher] Erro no poll: {}", err);
                     } else {
                         s.ultimo_erro = None;
+                        // Notificar frontend de que o banco pode ter mudado
+                        let _ = app.emit("db-changed", ());
                     }
                 }
 
@@ -684,7 +687,7 @@ async fn criar_proposta_automatica(
 
     let proposta = db::models::Proposta {
         id: Some(ObjectId::new().to_hex()),
-        valor_proposta: valor_centavos,
+        valor_proposta: valor_centavos as f64 / 100.0,
         valor_frete_pago: None,
         prazo_entrega: Some(prazo_str),
         transportadora_id: Some(transportadora_id),
@@ -777,16 +780,17 @@ async fn aplicar_valor_frete_pago(
     };
 
     // Atualizar valor_frete_pago na proposta ganhadora
+    let valor_reais = valor_centavos as f64 / 100.0;
     let mut orcamento_clone = orcamento.clone();
     for proposta in &mut orcamento_clone.propostas {
         if proposta.id.as_deref() == Some(&ganhadora_id) {
-            proposta.valor_frete_pago = Some(valor_centavos);
+            proposta.valor_frete_pago = Some(valor_reais);
             break;
         }
     }
 
     let mut divergencia_detectada = false;
-    let mut proposta_nominal = 0;
+    let mut proposta_nominal: f64 = 0.0;
 
     for proposta in &orcamento.propostas {
         if proposta.id.as_deref() == Some(&ganhadora_id) {
@@ -794,8 +798,7 @@ async fn aplicar_valor_frete_pago(
             break;
         }
     }
-
-    if proposta_nominal > 0 && proposta_nominal != valor_centavos {
+    if proposta_nominal > 0.0 && (proposta_nominal - valor_reais).abs() > f64::EPSILON {
         divergencia_detectada = true;
     }
 
@@ -813,8 +816,8 @@ async fn aplicar_valor_frete_pago(
         let body = format!(
             "Orçamento '{}' - frete pago R$ {:.2} vs proposta R$ {:.2}",
             orcamento.descricao,
-            valor_centavos as f64 / 100.0,
-            proposta_nominal as f64 / 100.0
+            valor_reais,
+            proposta_nominal
         );
 
         let _ = Notification::new()
@@ -823,6 +826,30 @@ async fn aplicar_valor_frete_pago(
             .show();
 
         println!("[EmailWatcher] Aviso divergência: {}", body);
+
+        // Persistir notificação no banco
+        let notificacao = db::models::Notificacao {
+            id: None,
+            orcamento_id,
+            orcamento_descricao: orcamento.descricao.clone(),
+            mensagem: format!(
+                "Divergência de nota detectada: frete pago R$ {:.2} vs proposta R$ {:.2}",
+                valor_reais,
+                proposta_nominal
+            ),
+            lida: false,
+            criada_em: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+        };
+        let _ = database.notificacoes.insert_one(notificacao).await;
+
+        // Marcar orçamento com divergência não tratada
+        let _ = database
+            .orcamentos
+            .update_one(
+                mongodb::bson::doc! { "_id": orcamento_id },
+                mongodb::bson::doc! { "$set": { "divergencia_tratada": false } },
+            )
+            .await;
     }
 
     Ok(Some((orcamento_id, orcamento.descricao.clone())))
