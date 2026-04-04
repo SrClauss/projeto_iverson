@@ -162,6 +162,18 @@ struct OrcamentoDetalheItem {
     descricao: String,
     data_criacao: String,
     ativo: bool,
+    cnpj_pagador: Option<String>,
+    cnpj_cpf_destino: Option<String>,
+    cep_destino: Option<String>,
+    endereco_destino: Option<String>,
+    nota: Option<String>,
+    valor_produto: Option<f64>,
+    qtd_volumes: Option<u32>,
+    volumes: Option<Vec<db::models::Volume>>,
+    dimensoes: Option<db::models::Dimensoes>,
+    peso: Option<f64>,
+    peso_total: Option<f64>,
+    transportadoras_enviadas: Vec<String>,
     proposta_ganhadora_id: Option<String>,
     propostas: Vec<PropostaDetalheItem>,
     divergencia_tratada: bool,
@@ -282,8 +294,20 @@ async fn map_orcamento_to_detalhe(
         descricao: orcamento.descricao,
         data_criacao: orcamento.data_criacao,
         ativo: orcamento.ativo,
+        cnpj_pagador: orcamento.cnpj_pagador,
+        cnpj_cpf_destino: orcamento.cnpj_cpf_destino,
+        cep_destino: orcamento.cep_destino,
+        endereco_destino: orcamento.endereco_destino,
+        nota: orcamento.nota,
+        valor_produto: orcamento.valor_produto,
+        qtd_volumes: orcamento.qtd_volumes,
+        volumes: orcamento.volumes,
+        dimensoes: orcamento.dimensoes,
+        peso: orcamento.peso,
+        peso_total: orcamento.peso_total,
         proposta_ganhadora_id: orcamento.proposta_ganhadora_id,
         propostas,
+        transportadoras_enviadas: orcamento.transportadoras_enviadas,
         divergencia_tratada: orcamento.divergencia_tratada,
     })
 }
@@ -391,6 +415,7 @@ fn resolve_gemini_api_key() -> Option<String> {
 fn has_gmail_read_scope(scopes: &str) -> bool {
     let valid_scopes = [
         "https://www.googleapis.com/auth/gmail.readonly",
+        "https://www.googleapis.com/auth/gmail.send",
         "https://www.googleapis.com/auth/gmail.modify",
         "https://www.googleapis.com/auth/gmail.metadata",
         "https://mail.google.com/",
@@ -464,7 +489,7 @@ async fn get_gmail_inbox_status() -> Result<GmailInboxStatus, String> {
     if let Some(scopes) = scopes.as_deref() {
         if !has_gmail_read_scope(scopes) {
             return Err(format!(
-                "GOOGLE_REFRESH_TOKEN atual não possui permissão para inbox. Escopos atuais: {}. Use um refresh token do mesmo usuário com escopo https://www.googleapis.com/auth/gmail.readonly.",
+                "GOOGLE_REFRESH_TOKEN atual não possui permissão para inbox. Escopos atuais: {}. Use um refresh token do mesmo usuário com escopo https://www.googleapis.com/auth/gmail.readonly ou https://www.googleapis.com/auth/gmail.send.",
                 scopes
             ));
         }
@@ -771,7 +796,7 @@ async fn get_dashboard_alertas(limit: u32) -> Result<Vec<DashboardAlertaItem>, S
 
     let mut orcamentos_cursor = database
         .orcamentos
-        .find(mongodb::bson::doc! { "ativo": true })
+        .find(mongodb::bson::doc! { "ativo": true, "divergencia_tratada": { "$ne": true } })
         .with_options(options)
         .await
         .map_err(|e| format!("Erro ao buscar orçamentos ativos: {}", e))?;
@@ -944,9 +969,12 @@ async fn marcar_divergencia_tratada(orcamento_id: String, tratada: bool) -> Resu
 async fn migrar_divergencia_tratada() -> Result<u32, String> {
     let database = db::get_database().await?;
 
+    // Apenas documentos que ainda não possuem o campo (migração única)
+    let filtro_sem_campo = mongodb::bson::doc! { "divergencia_tratada": { "$exists": false } };
+
     let mut cursor = database
         .orcamentos
-        .find(mongodb::bson::doc! {})
+        .find(filtro_sem_campo)
         .await
         .map_err(|e| format!("Erro ao buscar orçamentos: {}", e))?;
 
@@ -966,26 +994,13 @@ async fn migrar_divergencia_tratada() -> Result<u32, String> {
             None => continue,
         };
 
-        // Verificar se tem divergência real (frete pago diferente da proposta ganhadora)
-        let tem_divergencia = if let Some(ref ganhadora_id) = orc.proposta_ganhadora_id {
-            orc.propostas.iter().any(|p| {
-                p.id.as_deref() == Some(ganhadora_id.as_str())
-                    && p.valor_frete_pago
-                        .map(|pago| (pago - p.valor_proposta).abs() > 0.001)
-                        .unwrap_or(false)
-            })
-        } else {
-            false
-        };
-
-        // tratada = true se NÃO há divergência; false se há
-        let tratada = !tem_divergencia;
-
+        // Para registros sem o campo, inicializa como false (divergência pendente)
+        // O usuário poderá marcar como tratada manualmente depois
         database
             .orcamentos
             .update_one(
-                mongodb::bson::doc! { "_id": orc_id },
-                mongodb::bson::doc! { "$set": { "divergencia_tratada": tratada } },
+                mongodb::bson::doc! { "_id": orc_id, "divergencia_tratada": { "$exists": false } },
+                mongodb::bson::doc! { "$set": { "divergencia_tratada": false } },
             )
             .await
             .map_err(|e| format!("Erro ao atualizar: {}", e))?;
@@ -1174,10 +1189,10 @@ async fn excluir_notificacao(notificacao_id: String) -> Result<(), String> {
 
 #[tauri::command]
 fn set_tray_divergencias(app: tauri::AppHandle, count: u32) -> Result<String, String> {
-    let tooltip = if count == 0 {
-        "iverson-app".to_string()
-    } else {
-        format!("iverson-app - {} divergências", count)
+    let tooltip = match count {
+        0 => "iverson-app".to_string(),
+        1 => "iverson-app - 1 nova notificação".to_string(),
+        n => format!("iverson-app - {} novas notificações", n),
     };
 
     // Em Tauri 2, iteramos sobre os tray icons disponíveis
@@ -1341,6 +1356,17 @@ async fn update_orcamento_basico(
     orcamento_id: String,
     descricao: String,
     data_criacao: String,
+    cnpj_pagador: Option<String>,
+    cnpj_cpf_destino: Option<String>,
+    cep_destino: Option<String>,
+    endereco_destino: Option<String>,
+    nota: Option<String>,
+    valor_produto: Option<f64>,
+    qtd_volumes: Option<u32>,
+    volumes: Option<Vec<db::models::Dimensoes>>,
+    dimensoes: Option<db::models::Dimensoes>,
+    peso: Option<f64>,
+    peso_total: Option<f64>,
 ) -> Result<String, String> {
     let database = db::get_database().await?;
     let orcamento_oid = mongodb::bson::oid::ObjectId::parse_str(&orcamento_id)
@@ -1353,16 +1379,53 @@ async fn update_orcamento_basico(
         return Err("Descrição e data de criação são obrigatórias".to_string());
     }
 
+    let mut set_doc = mongodb::bson::Document::new();
+    set_doc.insert("descricao", descricao);
+    set_doc.insert("data_criacao", data_criacao);
+    set_doc.insert("cnpj_pagador", cnpj_pagador);
+    set_doc.insert("cnpj_cpf_destino", cnpj_cpf_destino);
+    set_doc.insert("cep_destino", cep_destino);
+    set_doc.insert("endereco_destino", endereco_destino);
+    set_doc.insert("nota", nota);
+    set_doc.insert("valor_produto", valor_produto);
+    set_doc.insert("qtd_volumes", qtd_volumes);
+    set_doc.insert("peso", peso);
+    set_doc.insert("peso_total", peso_total);
+    if let Some(qtd) = qtd_volumes {
+        set_doc.insert("qtd_volumes", qtd);
+    }
+    if let Some(total) = peso_total {
+        set_doc.insert("peso_total", total);
+    }
+    if let Some(vols) = volumes.clone() {
+        let bson_vols: Vec<mongodb::bson::Bson> = vols
+            .into_iter()
+            .map(|d| mongodb::bson::doc! { "comprimento": d.comprimento, "largura": d.largura, "altura": d.altura })
+            .map(mongodb::bson::Bson::Document)
+            .collect();
+        set_doc.insert("volumes", bson_vols);
+    } else {
+        set_doc.insert("volumes", mongodb::bson::Bson::Null);
+    }
+
+    if let Some(d) = dimensoes {
+        set_doc.insert(
+            "dimensoes",
+            mongodb::bson::doc! {
+                "comprimento": d.comprimento,
+                "largura": d.largura,
+                "altura": d.altura,
+            },
+        );
+    } else {
+        set_doc.insert("dimensoes", mongodb::bson::Bson::Null);
+    }
+
     let update_result = database
         .orcamentos
         .update_one(
             mongodb::bson::doc! { "_id": orcamento_oid },
-            mongodb::bson::doc! {
-                "$set": {
-                    "descricao": descricao,
-                    "data_criacao": data_criacao,
-                }
-            },
+            mongodb::bson::doc! { "$set": set_doc },
         )
         .await
         .map_err(|e| format!("Erro ao atualizar orçamento: {}", e))?;
@@ -1657,6 +1720,153 @@ async fn get_transportadoras() -> Result<Vec<TransportadoraItem>, String> {
     Ok(transportadoras)
 }
 
+#[tauri::command]
+async fn send_orcamento_request_email(
+    orcamento_id: Option<String>,
+    transportadora_ids: Vec<String>,
+    descricao: Option<String>,
+    nota: Option<String>,
+    valor_produto: Option<String>,
+    peso: Option<String>,
+    cep_destino: Option<String>,
+    endereco_destino: Option<String>,
+    data_criacao: Option<String>,
+) -> Result<String, String> {
+
+    if transportadora_ids.is_empty() {
+        return Err("Selecione ao menos uma transportadora.".to_string());
+    }
+
+    let database = db::get_database().await?;
+
+    let (descricao, nota, valor_produto, peso, cep_destino, endereco_destino, data_criacao) = if let Some(orcamento_id) = orcamento_id.clone() {
+        let orcamento_oid = mongodb::bson::oid::ObjectId::parse_str(&orcamento_id)
+            .map_err(|e| format!("ID de orçamento inválido: {}", e))?;
+        let orcamento = database
+            .orcamentos
+            .find_one(mongodb::bson::doc! { "_id": orcamento_oid })
+            .await
+            .map_err(|e| format!("Erro ao buscar orçamento: {}", e))?
+            .ok_or_else(|| "Orçamento não encontrado".to_string())?;
+
+        (
+            Some(orcamento.descricao),
+            orcamento.nota,
+            orcamento.valor_produto.map(|v| v.to_string()),
+            orcamento.peso.map(|v| v.to_string()),
+            orcamento.cep_destino,
+            orcamento.endereco_destino,
+            Some(orcamento.data_criacao),
+        )
+    } else {
+        (
+            descricao,
+            nota,
+            valor_produto,
+            peso,
+            cep_destino,
+            endereco_destino,
+            data_criacao,
+        )
+    };
+
+    let descricao = descricao.unwrap_or_default();
+    let nota = nota.unwrap_or_default();
+    let valor_produto = valor_produto.unwrap_or_default();
+    let peso = peso.unwrap_or_default();
+    let cep_destino = cep_destino.unwrap_or_default();
+    let endereco_destino = endereco_destino.unwrap_or_default();
+    let data_criacao = data_criacao.unwrap_or_default();
+
+    let mut object_ids = Vec::new();
+    for transportadora_id in &transportadora_ids {
+        let oid = mongodb::bson::oid::ObjectId::parse_str(&transportadora_id)
+            .map_err(|e| format!("ID de transportadora inválido: {}", e))?;
+        object_ids.push(oid);
+    }
+
+    let filter = mongodb::bson::doc! { "_id": { "$in": object_ids } };
+    let mut cursor = database
+        .transportadoras
+        .find(filter)
+        .await
+        .map_err(|e| format!("Erro ao buscar transportadoras: {}", e))?;
+
+    let mut transportadoras = Vec::new();
+    while cursor
+        .advance()
+        .await
+        .map_err(|e| format!("Erro ao coletar transportadoras: {}", e))?
+    {
+        let t: db::models::Transportadora = cursor
+            .deserialize_current()
+            .map_err(|e| format!("Erro ao desserializar transportadora: {}", e))?;
+        transportadoras.push(t);
+    }
+
+    if transportadoras.is_empty() {
+        return Err("Nenhuma transportadora encontrada".to_string());
+    }
+
+    let gmail = gmail_client::GmailClient::authenticate().await?;
+    let mut errors: Vec<String> = Vec::new();
+
+    for transportadora in transportadoras {
+        let to = transportadora.email_orcamento.trim();
+        if to.is_empty() {
+            errors.push(format!("{} não tem email de orçamento", transportadora.nome));
+            continue;
+        }
+
+        let subject = format!("Solicitação de orçamento - nota {}", nota.trim());
+        let body = format!(
+            "Olá {},\n\nSolicito orçamento para os seguintes dados:\n\nDescrição: {}\nNota: {}\nValor do produto: {}\nPeso: {}\nCEP destino: {}\nEndereço destino: {}\nData de criação: {}\n\nPor favor, envie sua proposta com prazo e valor o mais breve possível.\n\nObrigado.",
+            transportadora.nome,
+            descricao.trim(),
+            nota.trim(),
+            valor_produto.trim(),
+            peso.trim(),
+            cep_destino.trim(),
+            endereco_destino.trim(),
+            data_criacao.trim(),
+        );
+
+        if let Err(err) = gmail.send_email(to, &subject, &body).await {
+            errors.push(format!("{}: {}", transportadora.nome, err));
+        }
+    }
+
+    if let Some(orcamento_id) = orcamento_id {
+        let orcamento_oid = mongodb::bson::oid::ObjectId::parse_str(&orcamento_id)
+            .map_err(|e| format!("ID de orçamento inválido: {}", e))?;
+        let ids_bson: Vec<mongodb::bson::Bson> = transportadora_ids
+            .iter()
+            .map(|id| mongodb::bson::Bson::String(id.clone()))
+            .collect();
+
+        let update_doc = mongodb::bson::doc! {
+            "$addToSet": {
+                "transportadoras_enviadas": { "$each": ids_bson }
+            }
+        };
+
+        database
+            .orcamentos
+            .update_one(
+                mongodb::bson::doc! { "_id": orcamento_oid },
+                update_doc,
+            )
+            .await
+            .map_err(|e| format!("Erro ao atualizar orcamento com transportadoras enviadas: {}", e))?;
+    }
+
+    if errors.is_empty() {
+        Ok(format!("E-mails enviados para {} transportadora(s)", transportadora_ids.len()))
+    } else {
+        Err(format!("Erro ao enviar e-mails: {}", errors.join("; ")))
+    }
+}
+
 
 #[tauri::command]
 async fn filter_orcamentos_by(filter: String, value: String) -> Result<Vec<OrcamentoRecenteItem>, String> {
@@ -1739,7 +1949,45 @@ async fn filter_orcamentos_by(filter: String, value: String) -> Result<Vec<Orcam
             Ok(itens)
          }, 
 
-         // por valor, value deve ser JSON no formato [min,max]
+         // por CEP de destino (igual)
+         "cep_destino" => {
+             let cep = value.trim();
+             if cep.is_empty() {
+                 return Err("CEP de destino não pode estar vazio".to_string());
+             }
+
+             let mut cursor = database
+                 .orcamentos
+                 .find(mongodb::bson::doc! { "cep_destino": cep })
+                 .await
+                 .map_err(|e| format!("Erro ao buscar orçamentos: {}", e))?;
+
+             let mut itens: Vec<OrcamentoRecenteItem> = Vec::new();
+
+             while cursor
+                 .advance()
+                 .await
+                 .map_err(|e| format!("Erro ao coletar orçamentos: {}", e))?
+             {
+                 let orcamento = cursor
+                     .deserialize_current()
+                     .map_err(|e| format!("Erro ao desserializar orçamento: {}", e))?;
+                 let id = orcamento.id.as_ref().map(|oid| oid.to_hex()).unwrap_or_default();
+                 let status = status_orcamento(&orcamento);
+                 itens.push(OrcamentoRecenteItem {
+                     id,
+                     pedido: orcamento.descricao.clone(),
+                     status,
+                     propostas: orcamento.propostas.len() as u32,
+                     data: orcamento.data_criacao.clone(),
+                     transportadoras_preview: transportadoras_preview_for_orcamento(&orcamento, &transportadora_nome_por_id),
+                 });
+             }
+
+             Ok(itens)
+         },
+
+         // por valor de frete (compatível legado), value deve ser JSON no formato [min,max]
          "valor" => {
             let valores: Vec<f64> = serde_json::from_str(&value)
                 .map_err(|_| "Valor para filtro de valor deve ser JSON no formato [min,max]".to_string())?;
@@ -1762,7 +2010,98 @@ async fn filter_orcamentos_by(filter: String, value: String) -> Result<Vec<Orcam
                 .map_err(|e| format!("Erro ao buscar orçamentos: {}", e))?;
 
             let mut itens: Vec<OrcamentoRecenteItem> = Vec::new();
+            while cursor
+                .advance()
+                .await
+                .map_err(|e| format!("Erro ao coletar orçamentos: {}", e))?
+            {
+                let orcamento = cursor
+                    .deserialize_current()
+                    .map_err(|e| format!("Erro ao desserializar orçamento: {}", e))?;
+                let id = orcamento.id.as_ref().map(|oid| oid.to_hex()).unwrap_or_default();
+                let status = status_orcamento(&orcamento);
+                itens.push(OrcamentoRecenteItem {
+                    id,
+                    pedido: orcamento.descricao.clone(),
+                    status,
+                    propostas: orcamento.propostas.len() as u32,
+                    data: orcamento.data_criacao.clone(),
+                    transportadoras_preview: transportadoras_preview_for_orcamento(&orcamento, &transportadora_nome_por_id),
+                });
+            }
 
+            Ok(itens)
+         },
+
+         // por valor do produto
+         "valor_produto" => {
+            let valores: Vec<f64> = serde_json::from_str(&value)
+                .map_err(|_| "Valor para filtro de valor_produto deve ser JSON no formato [min,max]".to_string())?;
+
+            if valores.len() != 2 {
+                return Err("Valor para filtro de valor_produto deve conter exatamente 2 números".to_string());
+            }
+
+            let min = valores[0];
+            let max = valores[1];
+
+            if min > max {
+                return Err("Valor mínimo deve ser menor ou igual ao valor máximo".to_string());
+            }
+
+            let mut cursor = database
+                .orcamentos
+                .find(mongodb::bson::doc! { "valor_produto": { "$gte": min, "$lte": max } })
+                .await
+                .map_err(|e| format!("Erro ao buscar orçamentos: {}", e))?;
+
+            let mut itens: Vec<OrcamentoRecenteItem> = Vec::new();
+            while cursor
+                .advance()
+                .await
+                .map_err(|e| format!("Erro ao coletar orçamentos: {}", e))?
+            {
+                let orcamento = cursor
+                    .deserialize_current()
+                    .map_err(|e| format!("Erro ao desserializar orçamento: {}", e))?;
+                let id = orcamento.id.as_ref().map(|oid| oid.to_hex()).unwrap_or_default();
+                let status = status_orcamento(&orcamento);
+                itens.push(OrcamentoRecenteItem {
+                    id,
+                    pedido: orcamento.descricao.clone(),
+                    status,
+                    propostas: orcamento.propostas.len() as u32,
+                    data: orcamento.data_criacao.clone(),
+                    transportadoras_preview: transportadoras_preview_for_orcamento(&orcamento, &transportadora_nome_por_id),
+                });
+            }
+
+            Ok(itens)
+         },
+
+        // por peso do produto
+        "peso" => {
+            let valores: Vec<f64> = serde_json::from_str(&value)
+                .map_err(|_| "Valor para filtro de peso deve ser JSON no formato [min,max]".to_string())?;
+
+            if valores.len() != 2 {
+                return Err("Valor para filtro de peso deve conter exatamente 2 números".to_string());
+            }
+
+            let min = valores[0];
+            let max = valores[1];
+
+            if min > max {
+                return Err("Peso mínimo deve ser menor ou igual ao peso máximo".to_string());
+            }
+
+            let mut cursor = database
+                .orcamentos
+                .find(mongodb::bson::doc! { "peso": { "$gte": min, "$lte": max } })
+                .await
+                .map_err(|e| format!("Erro ao buscar orçamentos: {}", e))?;
+
+            let mut itens: Vec<OrcamentoRecenteItem> = Vec::new();
             while cursor
                 .advance()
                 .await
@@ -1881,7 +2220,7 @@ async fn filter_orcamentos_by(filter: String, value: String) -> Result<Vec<Orcam
             Ok(itens)
         },
 
-        _ => Err("Filtro inválido. Use: descricao, valor, data_criacao ou transportadora".to_string()),
+        _ => Err("Filtro inválido. Use: descricao, cep_destino, valor_produto, peso, data_criacao ou transportadora".to_string()),
     }
 }
 
@@ -2191,7 +2530,8 @@ pub fn run() {
             excluir_notificacao,
             sync_notificacoes_divergencias,
             marcar_divergencia_tratada,
-            migrar_divergencia_tratada
+            migrar_divergencia_tratada,
+            send_orcamento_request_email
         ])
         .setup(|app| {
             // Watcher state management

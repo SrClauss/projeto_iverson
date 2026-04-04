@@ -98,11 +98,16 @@ Analise este email de uma transportadora que está enviando uma cotação/propos
 
 Extraia duas informações:
 1. O VALOR DO FRETE proposto (em centavos de Real). Ex: R$ 1.250,00 = 125000, R$ 157,72 = 15772
-2. O PRAZO DE ENTREGA mencionado (ex: "3 dias úteis", "5 a 7 dias", "48 horas")
+2. O PRAZO DE ENTREGA mencionado. Converta sempre para DIAS CORRIDOS e responda em dias.
+   - Ex: "3 dias úteis" → 3 dias
+   - Ex: "5 a 7 dias" → 7 dias
+   - Ex: "48 horas" → 2 dias
+   - Ex: "1 mês" → 30 dias
+   - Ex: "2 semanas" → 14 dias
 
 Responda EXATAMENTE neste formato (uma linha por campo):
 VALOR: <numero_em_centavos>
-PRAZO: <prazo_texto>
+PRAZO: <numero_de_dias> dias
 
 Se não encontrar o valor, responda VALOR: 0
 Se não encontrar o prazo, responda PRAZO: A confirmar
@@ -129,8 +134,12 @@ CORPO:
                 }
             }
         } else if let Some(p) = line.strip_prefix("PRAZO:") {
-            let p = p.trim().to_string();
+            let mut p = p.trim().to_string();
             if !p.is_empty() {
+                let numeric_only: String = p.chars().filter(|c| c.is_ascii_digit()).collect();
+                if !numeric_only.is_empty() && p.chars().all(|c| c.is_ascii_digit() || c.is_whitespace()) {
+                    p = format!("{} dias", numeric_only);
+                }
                 prazo = Some(p);
             }
         }
@@ -195,7 +204,7 @@ pub async fn identificar_orcamento(
         r#"Você é um sistema automatizado de logística. Uma transportadora enviou um email com uma cotação de frete.
 Sua tarefa é decidir QUAL orçamento da lista abaixo esta cotação se refere.
 
-Você DEVE escolher a melhor opção. Analise o conteúdo do email (menção a cidades, produtos, pesos, destinos) e compare com as descrições dos orçamentos.
+Você DEVE escolher a melhor opção. Analise o conteúdo do email (menção a cidades, produtos, pesos, destinos) e compare com os parâmetros de cada orçamento: CNPJ pagador, CNPJ/CPF destino, CEP de destino, endereço de destino, nota, valor do produto, quantidade de volumes, dimensões de volumes ou produto, peso e peso total. NÃO use apenas a descrição.
 
 Responda SOMENTE com o número da opção escolhida (ex: "1" ou "3"). Nunca responda com texto adicional.
 Se houver dúvida entre opções, escolha a mais provável. Você PRECISA escolher uma.

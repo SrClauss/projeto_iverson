@@ -21,11 +21,51 @@ pub struct Transportadora {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Dimensoes {
+    pub comprimento: f64,
+    pub largura: f64,
+    pub altura: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Volume {
+    pub comprimento: f64,
+    pub largura: f64,
+    pub altura: f64,
+    #[serde(default)]
+    pub peso: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Orcamento {
     #[serde(rename = "_id", skip_serializing_if = "Option::is_none")]
     pub id: Option<ObjectId>,
     pub descricao: String,
     pub data_criacao: String,
+    #[serde(default)]
+    pub cnpj_pagador: Option<String>,
+    #[serde(default)]
+    pub cnpj_cpf_destino: Option<String>,
+    #[serde(default)]
+    pub cep_destino: Option<String>,
+    #[serde(default)]
+    pub endereco_destino: Option<String>,
+    #[serde(default)]
+    pub nota: Option<String>,
+    #[serde(default)]
+    pub valor_produto: Option<f64>,
+    #[serde(default)]
+    pub qtd_volumes: Option<u32>,
+    #[serde(default)]
+    pub volumes: Option<Vec<Volume>>,
+    #[serde(default)]
+    pub dimensoes: Option<Dimensoes>,
+    #[serde(default)]
+    pub peso: Option<f64>,
+    #[serde(default)]
+    pub peso_total: Option<f64>,
+    #[serde(default)]
+    pub transportadoras_enviadas: Vec<String>,
     #[serde(default)]
     pub propostas: Vec<Proposta>,
     #[serde(default = "default_true")]

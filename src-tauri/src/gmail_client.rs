@@ -98,6 +98,16 @@ fn has_gmail_read_scope(scopes: &str) -> bool {
         .any(|s| valid.iter().any(|v| v == &s))
 }
 
+fn has_gmail_send_scope(scopes: &str) -> bool {
+    let valid = [
+        "https://www.googleapis.com/auth/gmail.send",
+        "https://mail.google.com/",
+    ];
+    scopes
+        .split_whitespace()
+        .any(|s| valid.iter().any(|v| v == &s))
+}
+
 pub fn decode_gmail_body(data: &str) -> Option<String> {
     let decoded = URL_SAFE_NO_PAD.decode(data).ok()?;
     String::from_utf8(decoded).ok()
@@ -113,6 +123,74 @@ pub fn decode_gmail_body_bytes(data: &str) -> Option<Vec<u8>> {
         .or_else(|_| STANDARD.decode(&cleaned))
         .or_else(|_| STANDARD_NO_PAD.decode(&cleaned))
         .ok()
+}
+
+fn decode_rfc2047_word(encoded: &str) -> Option<String> {
+    if !encoded.starts_with("=?") || !encoded.ends_with("?=") {
+        return None;
+    }
+
+    let inner = &encoded[2..encoded.len() - 2];
+    let parts: Vec<&str> = inner.split('?').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+
+    let charset = parts[0];
+    let encoding = parts[1].to_uppercase();
+    let text = parts[2];
+
+    let bytes = match encoding.as_str() {
+        "B" => STANDARD.decode(text).ok()?,
+        "Q" => {
+            let mut result = Vec::new();
+            let mut chars = text.chars();
+            while let Some(ch) = chars.next() {
+                if ch == '_' {
+                    result.push(b' ');
+                } else if ch == '=' {
+                    let hi = chars.next()?;
+                    let lo = chars.next()?;
+                    let hex = format!("{}{}", hi, lo);
+                    let byte = u8::from_str_radix(&hex, 16).ok()?;
+                    result.push(byte);
+                } else {
+                    result.extend(ch.to_string().as_bytes());
+                }
+            }
+            result
+        }
+        _ => return None,
+    };
+
+    if charset.eq_ignore_ascii_case("UTF-8") {
+        return String::from_utf8(bytes).ok();
+    }
+
+    String::from_utf8(bytes).ok()
+}
+
+fn decode_rfc2047_header(value: &str) -> String {
+    let mut decoded = String::new();
+    let mut remaining = value;
+
+    while let Some(start) = remaining.find("=?") {
+        decoded.push_str(&remaining[..start]);
+        if let Some(end_offset) = remaining[start + 2..].find("?=") {
+            let end = start + 2 + end_offset;
+            let token = &remaining[start..=end + 1];
+            if let Some(text) = decode_rfc2047_word(token) {
+                decoded.push_str(&text);
+                remaining = &remaining[end + 2..];
+                continue;
+            }
+        }
+        decoded.push_str(&remaining[start..]);
+        return decoded;
+    }
+
+    decoded.push_str(remaining);
+    decoded
 }
 
 pub fn extract_plain_text_body(part: &GmailMessagePart) -> Option<String> {
@@ -265,9 +343,9 @@ impl GmailClient {
         };
 
         if let Some(s) = scopes.as_deref() {
-            if !has_gmail_read_scope(s) {
+            if !has_gmail_read_scope(s) || !has_gmail_send_scope(s) {
                 return Err(format!(
-                    "GOOGLE_REFRESH_TOKEN sem permissão de inbox. Escopos: {}",
+                    "GOOGLE_REFRESH_TOKEN sem permissão de inbox ou envio. Escopos: {}",
                     s
                 ));
             }
@@ -368,6 +446,37 @@ impl GmailClient {
             .ok_or_else(|| "Attachment sem dados".to_string())?;
 
         decode_gmail_body_bytes(&data).ok_or_else(|| "Erro ao decodificar attachment base64".to_string())
+    }
+
+    pub async fn send_email(&self, to: &str, subject: &str, body_text: &str) -> Result<(), String> {
+        // RFC 2047: encode subject with non-ASCII chars as =?UTF-8?B?<base64>?=
+        let encoded_subject = format!("=?UTF-8?B?{}?=", STANDARD.encode(subject.as_bytes()));
+
+        let raw_message = format!(
+            "From: me\r\nTo: {}\r\nSubject: {}\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\nMIME-Version: 1.0\r\n\r\n{}",
+            to, encoded_subject, body_text
+        );
+
+        let encoded = URL_SAFE_NO_PAD.encode(raw_message.as_bytes());
+        let payload = serde_json::json!({ "raw": encoded });
+
+        let response = self
+            .http
+            .post("https://gmail.googleapis.com/gmail/v1/users/me/messages/send")
+            .bearer_auth(&self.access_token)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| format!("Erro ao enviar email: {}", e))?;
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+
+        if !status.is_success() {
+            return Err(format!("Erro Gmail send ({}): {}", status, body));
+        }
+
+        Ok(())
     }
 
     /// Retorna status da inbox (mantém compatibilidade)

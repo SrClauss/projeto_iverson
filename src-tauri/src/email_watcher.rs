@@ -382,32 +382,36 @@ async fn processar_cotacao(
     //    Se só tem 1 ativo, manda direto. Se tem vários, IA decide.
     let (orcamento_match, orcamento_desc) = if orcamentos_ativos.len() == 1 {
         // Só 1 orçamento ativo → vai direto, sem perguntar
-        let (oid, desc) = &orcamentos_ativos[0];
+        let (oid, orc) = &orcamentos_ativos[0];
+        let desc = campos_orcamento_para_texto(orc);
         println!("[EmailWatcher] Só 1 orçamento ativo, enviando direto: {}", desc);
-        (Some(*oid), Some(desc.clone()))
+        (Some(*oid), Some(desc))
     } else {
-        // Tentar match por substring primeiro
-        let match_descricao = match_orcamento_por_descricao(subject, body, &orcamentos_ativos);
-        if let Some((oid, desc)) = match_descricao {
-            println!("[EmailWatcher] Match por substring: {}", desc);
+        // Tentar match por atributos do orçamento primeiro
+        let match_orcamento = match_orcamento_por_parametros(subject, body, &orcamentos_ativos);
+        if let Some((oid, desc)) = match_orcamento {
+            println!("[EmailWatcher] Match por parâmetros: {}", desc);
             (Some(oid), Some(desc))
         } else {
-            // IA decide — o prompt GARANTE que ela sempre escolhe
-            let descricoes: Vec<String> = orcamentos_ativos.iter().map(|(_, d)| d.clone()).collect();
-            match gemini_client::identificar_orcamento(subject, body, &descricoes).await {
+            let orcamento_infos: Vec<String> = orcamentos_ativos
+                .iter()
+                .map(|(_, orc)| campos_orcamento_para_texto(orc))
+                .collect();
+
+            match gemini_client::identificar_orcamento(subject, body, &orcamento_infos).await {
                 Ok(Some(desc_match)) => {
                     let oid = orcamentos_ativos
                         .iter()
-                        .find(|(_, d)| d == &desc_match)
+                        .find(|(_, orc)| campos_orcamento_para_texto(orc) == desc_match)
                         .map(|(id, _)| *id);
                     println!("[EmailWatcher] IA escolheu orçamento: {}", desc_match);
                     (oid, Some(desc_match))
                 }
                 Ok(None) | Err(_) => {
-                    // Fallback: primeiro orçamento ativo
-                    let (oid, desc) = &orcamentos_ativos[0];
+                    let (oid, orc) = &orcamentos_ativos[0];
+                    let desc = campos_orcamento_para_texto(orc);
                     println!("[EmailWatcher] Fallback para primeiro orçamento: {}", desc);
-                    (Some(*oid), Some(desc.clone()))
+                    (Some(*oid), Some(desc))
                 }
             }
         }
@@ -442,6 +446,18 @@ async fn processar_cotacao(
                         transportadora_nome,
                         valor as f64 / 100.0
                     );
+                    let notificacao_msg = format!(
+                        "Nova proposta recebida de {} para o orçamento {}",
+                        transportadora_nome,
+                        orcamento_desc.as_deref().unwrap_or("desconhecido")
+                    );
+                    let _ = criar_notificacao(
+                        database,
+                        orcamento_oid,
+                        orcamento_desc.clone().unwrap_or_default(),
+                        notificacao_msg,
+                    )
+                    .await;
                 }
                 Err(e) => {
                     eprintln!("[EmailWatcher] Erro ao criar proposta: {}", e);
@@ -579,6 +595,8 @@ async fn processar_nota(
     }
 
     // 5. Salvar email processado
+    let status_clone = email_status.clone();
+    let orcamento_desc_clone = orcamento_desc.clone();
     let email_doc = db::models::EmailProcessado {
         id: None,
         gmail_message_id: msg_id.to_string(),
@@ -586,9 +604,9 @@ async fn processar_nota(
         transportadora_id,
         transportadora_nome: transportadora_nome.to_string(),
         orcamento_id: orcamento_match,
-        orcamento_descricao: orcamento_desc,
+        orcamento_descricao: orcamento_desc_clone.clone(),
         processado_em: now_iso.to_string(),
-        status: email_status,
+        status: status_clone,
         valor_extraido,
         erro: erro_msg,
         assunto: Some(subject.to_string()),
@@ -596,14 +614,53 @@ async fn processar_nota(
         prazo_extraido: None,
     };
 
+    if email_status == "aplicado" {
+        if let Some(orcamento_oid) = orcamento_match {
+            let notificacao_msg = format!(
+                "Nota recebida de {} para o orçamento {}",
+                transportadora_nome,
+                orcamento_desc.clone().unwrap_or_else(|| "desconhecido".to_string())
+            );
+            let _ = criar_notificacao(
+                database,
+                orcamento_oid,
+                orcamento_desc.clone().unwrap_or_default(),
+                notificacao_msg,
+            )
+            .await;
+        }
+    }
+
     let _ = database.emails_processados.insert_one(email_doc).await;
     incrementar_contador(database, status).await;
 }
 
+async fn criar_notificacao(
+    database: &db::Database,
+    orcamento_id: ObjectId,
+    orcamento_descricao: String,
+    mensagem: String,
+) -> Result<(), String> {
+    let notificacao = db::models::Notificacao {
+        id: None,
+        orcamento_id,
+        orcamento_descricao,
+        mensagem,
+        lida: false,
+        criada_em: chrono::Utc::now().to_rfc3339(),
+    };
+    database
+        .notificacoes
+        .insert_one(notificacao)
+        .await
+        .map_err(|e| format!("Erro ao salvar notificação: {}", e))?;
+    Ok(())
+}
+
 // ── Funções auxiliares ───────────────────────────────────────
 
-/// Busca orçamentos ativos e retorna lista de (ObjectId, descricao)
-async fn buscar_orcamentos_ativos(database: &db::Database) -> Vec<(ObjectId, String)> {
+/// Busca orçamentos ativos e retorna lista de (ObjectId, Orcamento)
+async fn buscar_orcamentos_ativos(database: &db::Database) -> Vec<(ObjectId, db::models::Orcamento)> {
     let mut cursor = match database
         .orcamentos
         .find(mongodb::bson::doc! { "ativo": true })
@@ -617,33 +674,142 @@ async fn buscar_orcamentos_ativos(database: &db::Database) -> Vec<(ObjectId, Str
     while cursor.advance().await.unwrap_or(false) {
         if let Ok(orc) = cursor.deserialize_current() {
             if let Some(id) = orc.id {
-                result.push((id, orc.descricao));
+                result.push((id, orc));
             }
         }
     }
     result
 }
 
-/// Match de orçamento por substring da descricao no subject ou body
-fn match_orcamento_por_descricao(
+fn campos_orcamento_para_texto(orc: &db::models::Orcamento) -> String {
+    let mut partes: Vec<String> = Vec::new();
+
+    partes.push(format!("Descrição: {}", orc.descricao));
+    if let Some(cep) = &orc.cep_destino {
+        if !cep.trim().is_empty() {
+            partes.push(format!("CEP destino: {}", cep.trim()));
+        }
+    }
+    if let Some(endereco) = &orc.endereco_destino {
+        if !endereco.trim().is_empty() {
+            partes.push(format!("Endereço destino: {}", endereco.trim()));
+        }
+    }
+    if let Some(nota) = &orc.nota {
+        if !nota.trim().is_empty() {
+            partes.push(format!("Nota: {}", nota.trim()));
+        }
+    }
+    if let Some(qtd_volumes) = orc.qtd_volumes {
+        partes.push(format!("Qtd volumes: {}", qtd_volumes));
+    }
+    if let Some(volumes) = &orc.volumes {
+        let volumes_str = volumes
+            .iter()
+            .enumerate()
+            .map(|(i, v)| {
+                let peso_text = v.peso.map(|p| format!(" ({:.2} kg)", p)).unwrap_or_default();
+                format!("Volume[{}]: {:.2} x {:.2} x {:.2}{}", i + 1, v.comprimento, v.largura, v.altura, peso_text)
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        if !volumes_str.is_empty() {
+            partes.push(volumes_str);
+        }
+    }
+    if let Some(peso_total) = orc.peso_total {
+        partes.push(format!("Peso total: {:.3} kg", peso_total));
+    }
+    if let Some(cnpj_pagador) = &orc.cnpj_pagador {
+        if !cnpj_pagador.trim().is_empty() {
+            partes.push(format!("CNPJ pagador: {}", cnpj_pagador.trim()));
+        }
+    }
+    if let Some(cnpj_cpf_destino) = &orc.cnpj_cpf_destino {
+        if !cnpj_cpf_destino.trim().is_empty() {
+            partes.push(format!("CNPJ/CPF destino: {}", cnpj_cpf_destino.trim()));
+        }
+    }
+    if let Some(cep) = &orc.cep_destino {
+        if !cep.trim().is_empty() {
+            partes.push(format!("CEP destino: {}", cep.trim()));
+        }
+    }
+    if let Some(endereco) = &orc.endereco_destino {
+        if !endereco.trim().is_empty() {
+            partes.push(format!("Endereço destino: {}", endereco.trim()));
+        }
+    }
+    if let Some(nota) = &orc.nota {
+        if !nota.trim().is_empty() {
+            partes.push(format!("Nota: {}", nota.trim()));
+        }
+    }
+    if let Some(valor_produto) = orc.valor_produto {
+        partes.push(format!("Valor produto: R$ {:.2}", valor_produto));
+    }
+    if let Some(dimensoes) = &orc.dimensoes {
+        partes.push(format!(
+            "Dimensões (LxAxP): {:.2} x {:.2} x {:.2}",
+            dimensoes.comprimento, dimensoes.largura, dimensoes.altura
+        ));
+    }
+    if let Some(peso) = orc.peso {
+        partes.push(format!("Peso: {:.3} kg", peso));
+    }
+
+    partes.join("; ")
+}
+
+/// Match de orçamento por parâmetros no subject ou body
+fn match_orcamento_por_parametros(
     subject: &str,
     body: &str,
-    orcamentos: &[(ObjectId, String)],
+    orcamentos: &[(ObjectId, db::models::Orcamento)],
 ) -> Option<(ObjectId, String)> {
     let subject_lower = subject.to_lowercase();
     let body_lower = body.to_lowercase();
 
-    // Match exato no subject primeiro
-    for (id, desc) in orcamentos {
-        if subject_lower.contains(&desc.to_lowercase()) {
-            return Some((*id, desc.clone()));
+    for (id, orc) in orcamentos {
+        if let Some(cep) = &orc.cep_destino {
+            if !cep.trim().is_empty() {
+                let cep_lower = cep.to_lowercase();
+                if subject_lower.contains(&cep_lower) || body_lower.contains(&cep_lower) {
+                    return Some((*id, campos_orcamento_para_texto(orc)));
+                }
+            }
         }
-    }
 
-    // Match no body
-    for (id, desc) in orcamentos {
-        if body_lower.contains(&desc.to_lowercase()) {
-            return Some((*id, desc.clone()));
+        if let Some(endereco) = &orc.endereco_destino {
+            if !endereco.trim().is_empty() {
+                let endereco_lower = endereco.to_lowercase();
+                if subject_lower.contains(&endereco_lower) || body_lower.contains(&endereco_lower) {
+                    return Some((*id, campos_orcamento_para_texto(orc)));
+                }
+            }
+        }
+
+        if let Some(nota) = &orc.nota {
+            if !nota.trim().is_empty() {
+                let nota_lower = nota.to_lowercase();
+                if subject_lower.contains(&nota_lower) || body_lower.contains(&nota_lower) {
+                    return Some((*id, campos_orcamento_para_texto(orc)));
+                }
+            }
+        }
+
+        if let Some(valor_produto) = orc.valor_produto {
+            let valor_txt = format!("{:.2}", valor_produto);
+            if subject_lower.contains(&valor_txt) || body_lower.contains(&valor_txt) {
+                return Some((*id, campos_orcamento_para_texto(orc)));
+            }
+        }
+
+        if let Some(peso) = orc.peso {
+            let peso_txt = format!("{:.3}", peso);
+            if subject_lower.contains(&peso_txt) || body_lower.contains(&peso_txt) {
+                return Some((*id, campos_orcamento_para_texto(orc)));
+            }
         }
     }
 

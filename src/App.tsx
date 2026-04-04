@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {
   Box,
   Container,
@@ -31,6 +31,10 @@ import {
   FormControlLabel,
   Badge,
   Popover,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   Divider,
 } from '@mui/material';
 import {
@@ -38,17 +42,18 @@ import {
   LocalShipping,
   Add,
   Search,
+  Delete,
   Tune,
   AttachMoney,
   CalendarMonth,
   FilterAlt,
   RestartAlt,
+  FitnessCenter,
   DeleteOutline,
   Dashboard as DashboardIcon,
   BarChart,
   NotificationsActive,
   CheckCircle,
-  Delete,
   Close,
   AccountCircle,
   TrendingUp,
@@ -60,7 +65,7 @@ import { listen } from '@tauri-apps/api/event';
 import glassBackground from './assets/glass-background-bordeaux.svg';
 import './App.css';
 
-type FilterKey = 'descricao' | 'valor' | 'data_criacao' | 'transportadora';
+type FilterKey = 'descricao' | 'cep_destino' | 'valor_produto' | 'peso' | 'data_criacao' | 'transportadora';
 type AppView = 'dashboard' | 'transportadoras' | 'orcamentos' | 'relatorios' | 'divergencia';
 
 // ============ Tipos TypeScript ============
@@ -122,9 +127,21 @@ type OrcamentoDetalhe = {
   descricao: string;
   data_criacao: string;
   ativo: boolean;
+  cnpj_pagador?: string | null;
+  cnpj_cpf_destino?: string | null;
+  cep_destino?: string | null;
+  endereco_destino?: string | null;
+  nota?: string | null;
+  valor_produto?: number | null;
+  qtd_volumes?: number | null;
+  volumes?: { comprimento: number; largura: number; altura: number; peso?: number | null }[] | null;
+  dimensoes?: { comprimento: number; largura: number; altura: number } | null;
+  peso?: number | null;
+  peso_total?: number | null;
   proposta_ganhadora_id?: string | null;
   propostas: PropostaDetalhe[];
   divergencia_tratada: boolean;
+  transportadoras_enviadas: string[];
 };
 
 type GoogleAuthStatus = {
@@ -168,6 +185,33 @@ const glassPanel = {
   border: '1px solid rgba(255, 255, 255, 0.4)',
   borderRadius: '24px',
   boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.08)',
+};
+
+const onlyDigits = (value: string) => value.replace(/\D/g, '');
+
+const formatCNPJ = (value: string) => {
+  const digits = onlyDigits(value).slice(0, 14);
+  if (digits.length <= 2) return digits;
+  if (digits.length <= 5) return `${digits.slice(0, 2)}.${digits.slice(2)}`;
+  if (digits.length <= 8) return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5)}`;
+  if (digits.length <= 12) return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5, 8)}/${digits.slice(8)}`;
+  return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5, 8)}/${digits.slice(8, 12)}-${digits.slice(12)}`;
+};
+
+const formatCPF = (value: string) => {
+  const digits = onlyDigits(value).slice(0, 11);
+  if (digits.length <= 3) return digits;
+  if (digits.length <= 6) return `${digits.slice(0, 3)}.${digits.slice(3)}`;
+  if (digits.length <= 9) return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6)}`;
+  return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6, 9)}-${digits.slice(9)}`;
+};
+
+const formatCnpjOrCpf = (value: string) => {
+  const digits = onlyDigits(value);
+  if (digits.length > 11) {
+    return formatCNPJ(digits);
+  }
+  return formatCPF(digits);
 };
 
 const tableHeaderRowSx = {
@@ -233,7 +277,13 @@ const App = () => {
   const [dataInicial, setDataInicial] = useState('');
   const [dataFinal, setDataFinal] = useState('');
   const [transportadoraIds, setTransportadoraIds] = useState<string[]>([]);
+  const [selectedTransportadoraIds, setSelectedTransportadoraIds] = useState<string[]>([]);
+  const [forceSendTransportadoraIds, setForceSendTransportadoraIds] = useState<string[]>([]);
+  const [showEnviarOrcamentoModal, setShowEnviarOrcamentoModal] = useState(false);
+  const [sendingOrcamentoEmail, setSendingOrcamentoEmail] = useState(false);
+  const [, setSuccessMessage] = useState<string | null>(null);
   const [filtroAtivoLabel, setFiltroAtivoLabel] = useState<string | null>(null);
+  const [cepError, setCepError] = useState<string | null>(null);
   const [novaTransportadora, setNovaTransportadora] = useState({
     nome: '',
     cnpj: '',
@@ -246,6 +296,15 @@ const App = () => {
   const [novoOrcamento, setNovoOrcamento] = useState({
     descricao: '',
     data_criacao: getTodayIso(),
+    cnpj_pagador: '',
+    cnpj_cpf_destino: '',
+    cep_destino: '',
+    endereco_destino: '',
+    nota: '',
+    valor_produto: '',
+    volumes: [{ comprimento: '', largura: '', altura: '', peso: '' }],
+    dimensoes: { comprimento: '', largura: '', altura: '' },
+    peso: '',
   });
   const [orcamentoSelecionadoId, setOrcamentoSelecionadoId] = useState<string | null>(null);
   const [orcamentoDetalhe, setOrcamentoDetalhe] = useState<OrcamentoDetalhe | null>(null);
@@ -255,6 +314,50 @@ const App = () => {
     data_proposta: getTodayIso(),
     prazo_entrega: '',
   });
+
+  const volumesAgregados = useMemo(() => {
+    const volumes = (novoOrcamento.volumes || [])
+      .filter((v: any) => v.comprimento || v.largura || v.altura || v.peso)
+      .map((v: any) => ({
+        comprimento: Number(v.comprimento.replace(',', '.')),
+        largura: Number(v.largura.replace(',', '.')),
+        altura: Number(v.altura.replace(',', '.')),
+        peso: v.peso ? Number(v.peso.replace(',', '.')) : 0,
+      }));
+
+    const totalPeso = volumes.reduce((acc, vol) => acc + (Number.isNaN(vol.peso) ? 0 : vol.peso), 0);
+    const totalVolume = volumes.reduce((acc, vol) => {
+      if (Number.isNaN(vol.comprimento) || Number.isNaN(vol.largura) || Number.isNaN(vol.altura)) return acc;
+      return acc + vol.comprimento * vol.largura * vol.altura;
+    }, 0);
+
+    return {
+      count: volumes.length,
+      totalPeso,
+      totalVolume,
+    };
+  }, [novoOrcamento.volumes]);
+
+  const detalheVolumesAgregados = useMemo(() => {
+    const volumes = (orcamentoDetalhe?.volumes || []).map((v) => ({
+      comprimento: v.comprimento,
+      largura: v.largura,
+      altura: v.altura,
+      peso: v.peso || 0,
+    }));
+
+    const totalPeso = volumes.reduce((acc, vol) => acc + (Number.isNaN(vol.peso) ? 0 : vol.peso), 0);
+    const totalVolume = volumes.reduce((acc, vol) => {
+      if (Number.isNaN(vol.comprimento) || Number.isNaN(vol.largura) || Number.isNaN(vol.altura)) return acc;
+      return acc + vol.comprimento * vol.largura * vol.altura;
+    }, 0);
+
+    return {
+      count: volumes.length,
+      totalPeso,
+      totalVolume,
+    };
+  }, [orcamentoDetalhe]);
 
   // ── Google Auth State ───────────────────────────────────
   const [googleAuth, setGoogleAuth] = useState<GoogleAuthStatus | null>(null);
@@ -298,23 +401,75 @@ const App = () => {
   // ============ Listener de mudança no banco (watcher) ============
   useEffect(() => {
     const unlisten = listen('db-changed', () => {
-      loadDashboard();
+      loadDashboard(undefined, false);
     });
     return () => {
       unlisten.then((fn) => fn());
     };
   }, []);
 
-  const loadDashboard = async (includeInactive?: boolean) => {
-    setLoading(true);
+  // ============ Validador de CEP + busca endereço (ViaCEP) ============
+  useEffect(() => {
+    let timeoutId: number | undefined;
+    const cepInput = novoOrcamento.cep_destino || '';
+    const cepLimpo = cepInput.replace(/\D/g, '');
+
+    if (!cepInput.trim()) {
+      setCepError(null);
+      return;
+    }
+
+    if (cepLimpo.length !== 8) {
+      setCepError('CEP inválido. Deve ter 8 dígitos.');
+      return;
+    }
+
+    setCepError(null);
+
+    timeoutId = window.setTimeout(async () => {
+      try {
+        const resp = await fetch(`https://viacep.com.br/ws/${cepLimpo}/json/`);
+        if (!resp.ok) {
+          throw new Error('Falha ao buscar CEP');
+        }
+
+        const data = await resp.json();
+        if (data.erro) {
+          setCepError('CEP não encontrado.');
+          return;
+        }
+
+        const enderecoFormatado = [data.logradouro, data.bairro, data.localidade, data.uf]
+          .filter(Boolean)
+          .join(', ');
+
+        setNovoOrcamento((prev) => ({
+          ...prev,
+          endereco_destino: enderecoFormatado || prev.endereco_destino,
+        }));
+        setCepError(null);
+      } catch (err) {
+        setCepError('Não foi possível consultar o CEP.');
+      }
+    }, 500);
+
+    return () => {
+      if (timeoutId !== undefined) {
+        window.clearTimeout(timeoutId);
+      }
+    };
+  }, [novoOrcamento.cep_destino]);
+
+  const loadDashboard = async (includeInactive?: boolean, showLoading = true) => {
+    if (showLoading) {
+      setLoading(true);
+    }
     setError(null);
     const inactive = includeInactive ?? mostrarInativos;
 
     try {
       // Sincronizar notificações de divergências existentes (sem bloquear)
-      invoke('sync_notificacoes_divergencias').catch(() => {});
-      // Migrar campo divergencia_tratada p/ registros antigos
-      invoke('migrar_divergencia_tratada').catch(() => {});
+      invoke('sync_notificacoes_divergencias').catch(() => {});;
 
       const [statsData, orcamentosData, alertasData, notificacoesData] = await Promise.all([
         invoke<DashboardStats>('get_dashboard_stats'),
@@ -332,12 +487,15 @@ const App = () => {
       setTransportadoras(transportadorasData);
       setFiltroAtivoLabel(null);
 
-      await invoke('set_tray_divergencias', { count: alertasData.length });
+      const unreadNotificacoes = notificacoesData.filter((n) => !n.lida).length;
+      await invoke('set_tray_divergencias', { count: unreadNotificacoes });
     } catch (err) {
       setError(String(err));
       console.error('Erro ao carregar dashboard:', err);
     } finally {
-      setLoading(false);
+      if (showLoading) {
+        setLoading(false);
+      }
     }
   };
 
@@ -515,6 +673,26 @@ const App = () => {
       setNovoOrcamento({
         descricao: detalhe.descricao,
         data_criacao: detalhe.data_criacao,
+        cnpj_pagador: detalhe.cnpj_pagador || '',
+        cnpj_cpf_destino: detalhe.cnpj_cpf_destino || '',
+        cep_destino: detalhe.cep_destino || '',
+        endereco_destino: detalhe.endereco_destino || '',
+        nota: detalhe.nota || '',
+        valor_produto: detalhe.valor_produto !== undefined && detalhe.valor_produto !== null ? String(detalhe.valor_produto) : '',
+        volumes: detalhe.volumes?.length
+          ? detalhe.volumes.map((v) => ({
+              comprimento: String(v.comprimento),
+              largura: String(v.largura),
+              altura: String(v.altura),
+              peso: v.peso !== undefined && v.peso !== null ? String(v.peso) : '',
+            }))
+          : [{ comprimento: '', largura: '', altura: '', peso: '' }],
+        dimensoes: {
+          comprimento: detalhe.dimensoes?.comprimento ? String(detalhe.dimensoes.comprimento) : '',
+          largura: detalhe.dimensoes?.largura ? String(detalhe.dimensoes.largura) : '',
+          altura: detalhe.dimensoes?.altura ? String(detalhe.dimensoes.altura) : '',
+        },
+        peso: detalhe.peso !== undefined && detalhe.peso !== null ? String(detalhe.peso) : '',
       });
     } catch (err) {
       setError(String(err));
@@ -535,6 +713,15 @@ const App = () => {
     setNovoOrcamento({
       descricao: '',
       data_criacao: getTodayIso(),
+      cnpj_pagador: '',
+      cnpj_cpf_destino: '',
+      cep_destino: '',
+      endereco_destino: '',
+      nota: '',
+      valor_produto: '',
+      volumes: [{ comprimento: '', largura: '', altura: '', peso: '' }],
+      dimensoes: { comprimento: '', largura: '', altura: '' },
+      peso: '',
     });
     setNovaProposta({
       valor_proposta: '',
@@ -547,6 +734,7 @@ const App = () => {
 
   const handleSalvarTransportadora = async () => {
     setError(null);
+    setSuccessMessage(null);
 
     const payload = {
       nome: novaTransportadora.nome.trim(),
@@ -583,6 +771,91 @@ const App = () => {
       setError(String(err));
     } finally {
       setSavingTransportadora(false);
+    }
+  };
+
+  const handleToggleSelectTransportadora = (transportadoraId: string) => {
+    setSelectedTransportadoraIds((prev) =>
+      prev.includes(transportadoraId)
+        ? prev.filter((id) => id !== transportadoraId)
+        : [...prev, transportadoraId]
+    );
+  };
+
+  const handleOpenEnviarOrcamentoModal = () => {
+    if (!orcamentoSelecionadoId) {
+      setError('Abra um orçamento existente para enviar e-mails.');
+      return;
+    }
+
+    const alreadySentIds = orcamentoDetalhe?.transportadoras_enviadas || [];
+    const defaultSelection = transportadoras
+      .filter((item) => !alreadySentIds.includes(item.id))
+      .map((item) => item.id);
+
+    setSelectedTransportadoraIds(defaultSelection);
+    setForceSendTransportadoraIds([]);
+    setShowEnviarOrcamentoModal(true);
+  };
+
+  const handleToggleForceSendTransportadora = (transportadoraId: string) => {
+    const alreadySent = orcamentoDetalhe?.transportadoras_enviadas?.includes(transportadoraId);
+    setForceSendTransportadoraIds((prev) => {
+      const next = prev.includes(transportadoraId)
+        ? prev.filter((id) => id !== transportadoraId)
+        : [...prev, transportadoraId];
+
+      if (next.includes(transportadoraId)) {
+        setSelectedTransportadoraIds((current) =>
+          current.includes(transportadoraId) ? current : [...current, transportadoraId]
+        );
+      } else if (alreadySent) {
+        setSelectedTransportadoraIds((current) => current.filter((id) => id !== transportadoraId));
+      }
+
+      return next;
+    });
+  };
+
+  const handleEnviarEmailOrcamento = async () => {
+    setError(null);
+    setSuccessMessage(null);
+
+    if (!orcamentoSelecionadoId) {
+      setError('Abra um orçamento existente para enviar e-mails.');
+      return;
+    }
+
+    if (selectedTransportadoraIds.length === 0) {
+      setError('Selecione ao menos uma transportadora.');
+      return;
+    }
+
+    if (!novoOrcamento.descricao.trim() || !novoOrcamento.nota.trim() || !novoOrcamento.valor_produto.trim()) {
+      setError('Preencha descrição, nota e valor do produto antes de enviar.');
+      return;
+    }
+
+    setSendingOrcamentoEmail(true);
+    try {
+      const response = await invoke<string>('send_orcamento_request_email', {
+        orcamentoId: orcamentoSelecionadoId,
+        transportadoraIds: selectedTransportadoraIds,
+        descricao: novoOrcamento.descricao.trim(),
+        nota: novoOrcamento.nota.trim(),
+        valorProduto: novoOrcamento.valor_produto.trim(),
+        peso: novoOrcamento.peso.trim(),
+        cepDestino: novoOrcamento.cep_destino.trim(),
+        enderecoDestino: novoOrcamento.endereco_destino.trim(),
+        dataCriacao: novoOrcamento.data_criacao.trim(),
+      });
+      setSuccessMessage(response);
+      setShowEnviarOrcamentoModal(false);
+      await loadOrcamentoDetalhe(orcamentoSelecionadoId);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setSendingOrcamentoEmail(false);
     }
   };
 
@@ -688,12 +961,78 @@ const App = () => {
       return;
     }
 
+    const valorProduto = novoOrcamento.valor_produto
+      ? Number(novoOrcamento.valor_produto.replace(',', '.'))
+      : null;
+    const peso = novoOrcamento.peso
+      ? Number(novoOrcamento.peso.replace(',', '.'))
+      : null;
+
+    const volumes = (novoOrcamento.volumes || [])
+      .filter((v: any) => v.comprimento || v.largura || v.altura || v.peso)
+      .map((v: any) => ({
+        comprimento: Number(v.comprimento.replace(',', '.')),
+        largura: Number(v.largura.replace(',', '.')),
+        altura: Number(v.altura.replace(',', '.')),
+        peso: v.peso ? Number(v.peso.replace(',', '.')) : null,
+      }));
+
+    const pesoTotalVolumes = volumes.reduce((acc: number, vol: any) => {
+      if (vol.peso !== null && !Number.isNaN(vol.peso)) {
+        return acc + vol.peso;
+      }
+      return acc;
+    }, 0);
+
+    const pesoTotal = pesoTotalVolumes;
+    const dimensoes =
+      novoOrcamento.dimensoes.comprimento ||
+      novoOrcamento.dimensoes.largura ||
+      novoOrcamento.dimensoes.altura
+        ? {
+            comprimento: Number(novoOrcamento.dimensoes.comprimento.replace(',', '.')),
+            largura: Number(novoOrcamento.dimensoes.largura.replace(',', '.')),
+            altura: Number(novoOrcamento.dimensoes.altura.replace(',', '.')),
+          }
+        : null;
+    const cnpjPagador = novoOrcamento.cnpj_pagador?.trim() || null;
+    const cnpjCpfDestino = novoOrcamento.cnpj_cpf_destino?.trim() || null;
+
+    if (novoOrcamento.valor_produto && Number.isNaN(valorProduto)) {
+      setError('Valor do produto inválido.');
+      return;
+    }
+
+    if (novoOrcamento.peso && Number.isNaN(peso)) {
+      setError('Peso inválido.');
+      return;
+    }
+
+    if (volumes.some((vol: any) => Number.isNaN(vol.comprimento) || Number.isNaN(vol.largura) || Number.isNaN(vol.altura))) {
+      setError('Pelo menos um volume possui dimensão inválida.');
+      return;
+    }
+
+    if (volumes.some((vol: any) => vol.peso !== null && Number.isNaN(vol.peso))) {
+      setError('Pelo menos um volume possui peso inválido.');
+      return;
+    }
+
     setSavingOrcamento(true);
     try {
       const orcamentoId = await invoke<string>('add_orcamento', {
         orcamento: {
           descricao,
           data_criacao: dataCriacaoNormalizada,
+          cnpj_pagador: cnpjPagador,
+          cnpj_cpf_destino: cnpjCpfDestino,
+          cep_destino: novoOrcamento.cep_destino.trim() || null,
+          endereco_destino: novoOrcamento.endereco_destino.trim() || null,
+          nota: novoOrcamento.nota.trim() || null,
+          valor_produto: valorProduto,
+          volumes: volumes.length > 0 ? volumes : null,
+          dimensoes,
+          peso: peso ?? pesoTotal,
           propostas: [],
           ativo: true,
           transportadora_id: null,
@@ -704,6 +1043,15 @@ const App = () => {
       setNovoOrcamento({
         descricao,
         data_criacao: dataCriacaoNormalizada,
+        cnpj_pagador: novoOrcamento.cnpj_pagador,
+        cnpj_cpf_destino: novoOrcamento.cnpj_cpf_destino,
+        cep_destino: novoOrcamento.cep_destino,
+        endereco_destino: novoOrcamento.endereco_destino,
+        nota: novoOrcamento.nota,
+        valor_produto: novoOrcamento.valor_produto,
+        volumes: novoOrcamento.volumes,
+        dimensoes: novoOrcamento.dimensoes,
+        peso: novoOrcamento.peso || String(pesoTotal),
       });
       await loadOrcamentoDetalhe(orcamentoId);
 
@@ -728,12 +1076,65 @@ const App = () => {
       return;
     }
 
+    const valorProduto = novoOrcamento.valor_produto
+      ? Number(novoOrcamento.valor_produto.replace(',', '.'))
+      : null;
+    const peso = novoOrcamento.peso
+      ? Number(novoOrcamento.peso.replace(',', '.'))
+      : null;
+    const volumes = (novoOrcamento.volumes || [])
+      .filter((v: any) => v.comprimento || v.largura || v.altura || v.peso)
+      .map((v: any) => ({
+        comprimento: Number(v.comprimento.replace(',', '.')),
+        largura: Number(v.largura.replace(',', '.')),
+        altura: Number(v.altura.replace(',', '.')),
+        peso: v.peso ? Number(v.peso.replace(',', '.')) : null,
+      }));
+
+    const pesoTotalVolumes = volumes.reduce((acc: number, vol: any) => {
+      if (vol.peso !== null && !Number.isNaN(vol.peso)) {
+        return acc + vol.peso;
+      }
+      return acc;
+    }, 0);
+
+    const pesoTotal = pesoTotalVolumes;
+    const dimensoes =
+      novoOrcamento.dimensoes.comprimento ||
+      novoOrcamento.dimensoes.largura ||
+      novoOrcamento.dimensoes.altura
+        ? {
+            comprimento: Number(novoOrcamento.dimensoes.comprimento.replace(',', '.')),
+            largura: Number(novoOrcamento.dimensoes.largura.replace(',', '.')),
+            altura: Number(novoOrcamento.dimensoes.altura.replace(',', '.')),
+          }
+        : null;
+
+    if (novoOrcamento.valor_produto && Number.isNaN(valorProduto)) {
+      setError('Valor do produto inválido.');
+      return;
+    }
+
+    if (novoOrcamento.peso && Number.isNaN(peso)) {
+      setError('Peso inválido.');
+      return;
+    }
+
     setSavingEdicaoOrcamento(true);
     try {
       await invoke<string>('update_orcamento_basico', {
         orcamentoId: orcamentoSelecionadoId,
         descricao,
         dataCriacao: dataCriacaoNormalizada,
+        cnpj_pagador: novoOrcamento.cnpj_pagador.trim() || null,
+        cnpj_cpf_destino: novoOrcamento.cnpj_cpf_destino.trim() || null,
+        cep_destino: novoOrcamento.cep_destino.trim() || null,
+        endereco_destino: novoOrcamento.endereco_destino.trim() || null,
+        nota: novoOrcamento.nota.trim() || null,
+        valor_produto: valorProduto,
+        volumes: volumes.length > 0 ? volumes : null,
+        dimensoes,
+        peso: peso ?? pesoTotal,
       });
       await loadOrcamentoDetalhe(orcamentoSelecionadoId);
       await loadDashboard();
@@ -885,9 +1286,9 @@ const App = () => {
           value = descricao.trim();
           filtroDescricao = `Descrição: ${value}`;
           break;
-        case 'valor': {
+        case 'valor_produto': {
           if (valorMin === '' || valorMax === '') {
-            throw new Error('Informe valor mínimo e máximo.');
+            throw new Error('Informe valor mínimo e máximo do produto.');
           }
           const min = Number(valorMin);
           const max = Number(valorMax);
@@ -895,9 +1296,29 @@ const App = () => {
             throw new Error('Os valores do filtro precisam ser numéricos.');
           }
           value = JSON.stringify([min, max]);
-          filtroDescricao = `Valor entre R$ ${min} e R$ ${max}`;
+          filtroDescricao = `Valor do produto entre R$ ${min} e R$ ${max}`;
           break;
         }
+        case 'peso': {
+          if (valorMin === '' || valorMax === '') {
+            throw new Error('Informe peso mínimo e máximo.');
+          }
+          const min = Number(valorMin);
+          const max = Number(valorMax);
+          if (Number.isNaN(min) || Number.isNaN(max)) {
+            throw new Error('Os valores do filtro precisam ser numéricos.');
+          }
+          value = JSON.stringify([min, max]);
+          filtroDescricao = `Peso entre ${min} kg e ${max} kg`;
+          break;
+        }
+        case 'cep_destino':
+          if (!descricao.trim()) {
+            throw new Error('Informe o CEP de destino para filtrar.');
+          }
+          value = descricao.trim();
+          filtroDescricao = `CEP destino: ${value}`;
+          break;
         case 'data_criacao':
           if (!dataInicial || !dataFinal) {
             throw new Error('Informe a data inicial e final.');
@@ -949,6 +1370,7 @@ const App = () => {
       <Box
         sx={{
           minHeight: '100vh',
+          position: 'relative',
           display: 'flex',
           justifyContent: 'center',
           alignItems: 'center',
@@ -957,9 +1379,39 @@ const App = () => {
           backgroundPosition: 'center',
           backgroundRepeat: 'no-repeat',
           backgroundColor: '#f8fafc',
+          overflow: 'hidden',
         }}
       >
-        <CircularProgress />
+        <Box
+          sx={{
+            position: 'absolute',
+            inset: 0,
+            backgroundColor: 'rgba(255,255,255,0.58)',
+            backdropFilter: 'blur(14px) saturate(150%)',
+            WebkitBackdropFilter: 'blur(14px) saturate(150%)',
+          }}
+        />
+        <Box
+          sx={{
+            position: 'relative',
+            display: 'flex',
+            flexDirection: 'column',
+            justifyContent: 'center',
+            alignItems: 'center',
+            px: 4,
+            py: 6,
+            borderRadius: 4,
+            boxShadow: '0 24px 80px rgba(15, 23, 42, 0.12)',
+            backgroundColor: 'rgba(255,255,255,0.75)',
+            border: '1px solid rgba(255,255,255,0.72)',
+            backdropFilter: 'blur(24px)',
+          }}
+        >
+          <CircularProgress size={64} thickness={5} />
+          <Typography variant="h6" sx={{ mt: 3, color: 'text.primary' }}>
+            Carregando...
+          </Typography>
+        </Box>
       </Box>
     );
   }
@@ -1451,7 +1903,7 @@ const App = () => {
                 Filtros de orçamento
               </Typography>
               <Typography variant="caption" color="text.secondary">
-                Descrição, valor, data ou transportadora.
+                Descrição, CEP destino, valor produto, peso, data ou transportadora.
               </Typography>
             </Stack>
 
@@ -1473,7 +1925,9 @@ const App = () => {
               }}
             >
               <MenuItem value="descricao">Descrição</MenuItem>
-              <MenuItem value="valor">Faixa de valor</MenuItem>
+              <MenuItem value="cep_destino">CEP de destino</MenuItem>
+              <MenuItem value="valor_produto">Faixa valor do produto</MenuItem>
+              <MenuItem value="peso">Faixa de peso</MenuItem>
               <MenuItem value="data_criacao">Data de criação</MenuItem>
               <MenuItem value="transportadora">Transportadora</MenuItem>
             </TextField>
@@ -1499,27 +1953,27 @@ const App = () => {
               />
             )}
 
-            {filterType === 'valor' && (
+            {(filterType === 'valor_produto' || filterType === 'peso') && (
               <Stack direction="row" spacing={2} sx={{ flex: 1 }}>
                 <TextField
-                  label="Valor mínimo"
+                  label={filterType === 'peso' ? 'Peso mínimo (kg)' : 'Valor mínimo (R$)'}
                   variant="outlined"
                   type="text"
                   inputMode="decimal"
                   value={valorMin}
                   onChange={(event) => setValorMin(event.target.value)}
                   sx={{ flex: 1, minWidth: 140, '& .MuiOutlinedInput-root': { borderRadius: 0, '& .MuiInputAdornment-positionStart': { marginRight: 0 }, '& .MuiOutlinedInput-input': { boxShadow: 'none' } } }}
-                  slotProps={{ input: { startAdornment: <InputAdornment position="start"><AttachMoney sx={{ color: '#64748b' }} /></InputAdornment> } }}
+                  slotProps={{ input: { startAdornment: <InputAdornment position="start">{filterType === 'peso' ? <FitnessCenter sx={{ color: '#64748b' }} /> : <AttachMoney sx={{ color: '#64748b' }} />}</InputAdornment> } }}
                 />
                 <TextField
-                  label="Valor máximo"
+                  label={filterType === 'peso' ? 'Peso máximo (kg)' : 'Valor máximo (R$)'}
                   variant="outlined"
                   type="text"
                   inputMode="decimal"
                   value={valorMax}
                   onChange={(event) => setValorMax(event.target.value)}
                   sx={{ flex: 1, minWidth: 140, '& .MuiOutlinedInput-root': { borderRadius: 0, '& .MuiInputAdornment-positionStart': { marginRight: 0 }, '& .MuiOutlinedInput-input': { boxShadow: 'none' } } }}
-                  slotProps={{ input: { startAdornment: <InputAdornment position="start"><AttachMoney sx={{ color: '#64748b' }} /></InputAdornment> } }}
+                  slotProps={{ input: { startAdornment: <InputAdornment position="start">{filterType === 'peso' ? <FitnessCenter sx={{ color: '#64748b' }} /> : <AttachMoney sx={{ color: '#64748b' }} />}</InputAdornment> } }}
                 />
               </Stack>
             )}
@@ -1666,12 +2120,13 @@ const App = () => {
         <Box
           sx={{
             display: 'grid',
-            gridTemplateColumns: { xs: '1fr', lg: '2fr 1fr' },
+            gridTemplateColumns: { xs: '1fr', lg: '3fr 2fr' },
+            alignItems: 'stretch',
             gap: 2,
           }}
         >
           {/* Coluna Esquerda - Orçamentos & Alertas */}
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, height: '100%' }}>
             {/* Alerta de Divergência - Banner Principal (apenas o mais recente) */}
             {alertas.length > 0 && (
               <Box
@@ -1729,11 +2184,11 @@ const App = () => {
             )}
 
             {/* Orçamentos em Aberto */}
-            <Box sx={{ ...glassPanel, p: 3 }}>
+            <Box sx={{ ...glassPanel, p: 3, flex: 1, display: 'flex', flexDirection: 'column' }}>
               <Typography variant="h6" sx={{ fontWeight: 800, mb: 2 }}>
                 {mostrarInativos ? 'Todos os Orçamentos' : 'Orçamentos em Aberto'}
               </Typography>
-              <TableContainer sx={{ border: 'none' }}>
+              <TableContainer sx={{ border: 'none', flex: 1, overflowY: 'auto' }}>
                 <Table>
                   <TableHead>
                     <TableRow sx={tableHeaderRowSx}>
@@ -2154,56 +2609,6 @@ const App = () => {
               )}
             </Box>
 
-            {/* Stats Card */}
-            <Box
-              sx={{
-                ...glassPanel,
-                p: 3,
-                background: 'linear-gradient(135deg, #1e293b 0%, #0f172a 100%)',
-                color: 'white',
-                position: 'relative',
-                overflow: 'hidden',
-              }}
-            >
-              <Box sx={{ position: 'relative', zIndex: 1 }}>
-                <Typography variant="h6" sx={{ fontWeight: 800, mb: 3 }}>
-                  Dashboard
-                </Typography>
-                {stats && (
-                  <Stack spacing={2}>
-                    <Box>
-                      <Typography variant="caption" sx={{ opacity: 0.7 }}>
-                        ORÇAMENTOS ATIVOS
-                      </Typography>
-                      <Typography variant="h4" sx={{ fontWeight: 900 }}>
-                        {stats.orcamentos_ativos}
-                      </Typography>
-                    </Box>
-                    <Box>
-                      <Typography variant="caption" sx={{ opacity: 0.7 }}>
-                        TRANSPORTADORAS
-                      </Typography>
-                      <Typography variant="h4" sx={{ fontWeight: 900 }}>
-                        {stats.transportadoras}
-                      </Typography>
-                    </Box>
-                  </Stack>
-                )}
-              </Box>
-              {/* Círculo decorativo de fundo */}
-              <Box
-                sx={{
-                  position: 'absolute',
-                  top: -20,
-                  right: -20,
-                  width: 100,
-                  height: 100,
-                  borderRadius: '50%',
-                  background: 'rgba(99, 102, 241, 0.4)',
-                  filter: 'blur(30px)',
-                }}
-              />
-            </Box>
           </Stack>
         </Box>
         </>
@@ -2232,6 +2637,12 @@ const App = () => {
                 <TextField
                   label="CNPJ"
                   value={novaTransportadora.cnpj}
+                  onFocus={() =>
+                    setNovaTransportadora((prev) => ({ ...prev, cnpj: onlyDigits(prev.cnpj) }))
+                  }
+                  onBlur={() =>
+                    setNovaTransportadora((prev) => ({ ...prev, cnpj: formatCNPJ(prev.cnpj) }))
+                  }
                   onChange={(event) =>
                     setNovaTransportadora((prev) => ({ ...prev, cnpj: event.target.value }))
                   }
@@ -2307,17 +2718,19 @@ const App = () => {
             </Box>
 
             <Box sx={{ ...glassPanel, p: 3 }}>
-              <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 2 }}>
+              <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 2, gap: 1, flexWrap: 'wrap' }}>
                 <Typography variant="h6" sx={{ fontWeight: 800 }}>
                   Transportadoras Cadastradas
                 </Typography>
-                <Chip label={`${transportadoras.length} cadastradas`} size="small" />
+                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems="center">
+                  <Chip label={`${transportadoras.length} cadastradas`} size="small" />
+                </Stack>
               </Stack>
               <TableContainer sx={{ border: 'none' }}>
                 <Table>
                   <TableHead>
                     <TableRow sx={tableHeaderRowSx}>
-                      <TableCell sx={tableHeaderCellSx}>NOME</TableCell>
+                        <TableCell sx={tableHeaderCellSx}>NOME</TableCell>
                       <TableCell sx={tableHeaderCellSx}>CNPJ</TableCell>
                       <TableCell sx={tableHeaderCellSx}>TELEFONE</TableCell>
                       <TableCell sx={tableHeaderCellSx}>
@@ -2435,6 +2848,62 @@ const App = () => {
                       <Typography variant="body2" sx={{ fontWeight: 700 }}>{orcamentoDetalhe.data_criacao}</Typography>
                     </Stack>
                     <Stack direction="row" justifyContent="space-between">
+                      <Typography variant="body2" color="text.secondary">CEP de destino</Typography>
+                      <Typography variant="body2" sx={{ fontWeight: 700 }}>{orcamentoDetalhe.cep_destino ?? '-'}</Typography>
+                    </Stack>
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography variant="body2" color="text.secondary">Endereço de destino</Typography>
+                      <Typography variant="body2" sx={{ fontWeight: 700 }}>{orcamentoDetalhe.endereco_destino ?? '-'}</Typography>
+                    </Stack>
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography variant="body2" color="text.secondary">Nota</Typography>
+                      <Typography variant="body2" sx={{ fontWeight: 700 }}>{orcamentoDetalhe.nota ?? '-'}</Typography>
+                    </Stack>
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography variant="body2" color="text.secondary">Valor do produto</Typography>
+                      <Typography variant="body2" sx={{ fontWeight: 700 }}>{orcamentoDetalhe.valor_produto ? `R$ ${orcamentoDetalhe.valor_produto.toFixed(2)}` : '-'}</Typography>
+                    </Stack>
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography variant="body2" color="text.secondary">Dimensões</Typography>
+                      <Typography variant="body2" sx={{ fontWeight: 700 }}>{orcamentoDetalhe.dimensoes ? `${orcamentoDetalhe.dimensoes.comprimento} x ${orcamentoDetalhe.dimensoes.largura} x ${orcamentoDetalhe.dimensoes.altura}` : '-'}</Typography>
+                    </Stack>
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography variant="body2" color="text.secondary">Peso</Typography>
+                      <Typography variant="body2" sx={{ fontWeight: 700 }}>{orcamentoDetalhe.peso ? `${orcamentoDetalhe.peso.toFixed(3)} kg` : '-'}</Typography>
+                    </Stack>
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography variant="body2" color="text.secondary">Peso agregado (volumes)</Typography>
+                      <Typography variant="body2" sx={{ fontWeight: 700 }}>{detalheVolumesAgregados.totalPeso.toFixed(3)} kg</Typography>
+                    </Stack>
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography variant="body2" color="text.secondary">CNPJ Pagador</Typography>
+                      <Typography variant="body2" sx={{ fontWeight: 700 }}>{orcamentoDetalhe.cnpj_pagador ?? '-'}</Typography>
+                    </Stack>
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography variant="body2" color="text.secondary">CNPJ/CPF Destino</Typography>
+                      <Typography variant="body2" sx={{ fontWeight: 700 }}>{orcamentoDetalhe.cnpj_cpf_destino ?? '-'}</Typography>
+                    </Stack>
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography variant="body2" color="text.secondary">Qtd. Volumes</Typography>
+                      <Typography variant="body2" sx={{ fontWeight: 700 }}>{orcamentoDetalhe.qtd_volumes ?? '-'}</Typography>
+                    </Stack>
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography variant="body2" color="text.secondary">Volumes (LxAxP)</Typography>
+                      <Typography variant="body2" sx={{ fontWeight: 700 }}>{orcamentoDetalhe.volumes ? orcamentoDetalhe.volumes.map((v) => `${v.comprimento}x${v.largura}x${v.altura}${v.peso ? ` (${v.peso}kg)` : ''}`).join(', ') : '-'}</Typography>
+                    </Stack>
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography variant="body2" color="text.secondary">Volumes agregados</Typography>
+                      <Typography variant="body2" sx={{ fontWeight: 700 }}>{detalheVolumesAgregados.count}</Typography>
+                    </Stack>
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography variant="body2" color="text.secondary">Meta volume (m³)</Typography>
+                      <Typography variant="body2" sx={{ fontWeight: 700 }}>{detalheVolumesAgregados.totalVolume.toFixed(3)}</Typography>
+                    </Stack>
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography variant="body2" color="text.secondary">Peso agregado (kg)</Typography>
+                      <Typography variant="body2" sx={{ fontWeight: 700 }}>{detalheVolumesAgregados.totalPeso.toFixed(3)}</Typography>
+                    </Stack>
+                    <Stack direction="row" justifyContent="space-between">
                       <Typography variant="body2" color="text.secondary">Status</Typography>
                       <Chip
                         label={orcamentoDetalhe.ativo ? 'Ativo' : 'Encerrado'}
@@ -2452,14 +2921,18 @@ const App = () => {
                         sx={{ fontWeight: 700, cursor: 'pointer' }}
                         onClick={async () => {
                           const novoValor = !orcamentoDetalhe.divergencia_tratada;
-                          await invoke('marcar_divergencia_tratada', {
-                            orcamentoId: orcamentoDetalhe.id,
-                            tratada: novoValor,
-                          });
-                          setOrcamentoDetalhe((prev) =>
-                            prev ? { ...prev, divergencia_tratada: novoValor } : prev
-                          );
-                          await loadDashboard();
+                          try {
+                            await invoke('marcar_divergencia_tratada', {
+                              orcamentoId: orcamentoDetalhe.id,
+                              tratada: novoValor,
+                            });
+                            setOrcamentoDetalhe((prev) =>
+                              prev ? { ...prev, divergencia_tratada: novoValor } : prev
+                            );
+                            await loadDashboard();
+                          } catch (err) {
+                            setError(String(err));
+                          }
                         }}
                       />
                     </Stack>
@@ -2644,31 +3117,206 @@ const App = () => {
               </Stack>
 
               <Stack spacing={2}>
-                <TextField
-                  label="Descrição"
-                  value={novoOrcamento.descricao}
-                  onChange={(event) =>
-                    setNovoOrcamento((prev) => ({ ...prev, descricao: event.target.value }))
-                  }
-                  sx={{ '& .MuiOutlinedInput-root': { borderRadius: 0 } }}
-                  fullWidth
-                />
-                <TextField
-                  label="Data de criação"
-                  type="text"
-                  placeholder="dd/mm/aaaa ou aaaa-mm-dd"
-                  value={novoOrcamento.data_criacao}
-                  onChange={(event) =>
-                    setNovoOrcamento((prev) => ({ ...prev, data_criacao: event.target.value }))
-                  }
-                  sx={{ '& .MuiOutlinedInput-root': { borderRadius: 0 } }}
-                  InputLabelProps={{ shrink: true }}
-                  helperText="Exemplo: 27/03/2026"
-                  fullWidth
-                />
+                <Stack direction="row" spacing={2}>
+                  <TextField
+                    label="Descrição"
+                    value={novoOrcamento.descricao}
+                    onChange={(event) =>
+                      setNovoOrcamento((prev) => ({ ...prev, descricao: event.target.value }))
+                    }
+                    sx={{ '& .MuiOutlinedInput-root': { borderRadius: 0 } }}
+                    fullWidth
+                  />
+                  <TextField
+                    label="Data de criação"
+                    type="date"
+                    value={novoOrcamento.data_criacao}
+                    onChange={(event) =>
+                      setNovoOrcamento((prev) => ({ ...prev, data_criacao: event.target.value }))
+                    }
+                    sx={{ '& .MuiOutlinedInput-root': { borderRadius: 0 } }}
+                    InputLabelProps={{ shrink: true }}
+                    fullWidth
+                  />
+                </Stack>
 
+                <TextField
+                  label="CEP de destino"
+                  value={novoOrcamento.cep_destino}
+                  onChange={(event) =>
+                    setNovoOrcamento((prev) => ({ ...prev, cep_destino: event.target.value }))
+                  }
+                  error={!!cepError}
+                  helperText={cepError || 'Somente dígitos: 8 caracteres'}
+                  sx={{ '& .MuiOutlinedInput-root': { borderRadius: 0 } }}
+                  fullWidth
+                />
+                <TextField
+                  label="Endereço de destino"
+                  value={novoOrcamento.endereco_destino}
+                  onChange={(event) =>
+                    setNovoOrcamento((prev) => ({ ...prev, endereco_destino: event.target.value }))
+                  }
+                  sx={{ '& .MuiOutlinedInput-root': { borderRadius: 0 } }}
+                  fullWidth
+                />
+                <Stack direction="row" spacing={2}>
+                  <TextField
+                    label="Nota"
+                    placeholder="nota"
+                    value={novoOrcamento.nota}
+                    onChange={(event) =>
+                      setNovoOrcamento((prev) => ({ ...prev, nota: event.target.value }))
+                    }
+                    sx={{ '& .MuiOutlinedInput-root': { borderRadius: 0 } }}
+                    fullWidth
+                  />
+                  <TextField
+                    label="Valor"
+                    placeholder="valor"
+                    type="text"
+                    value={novoOrcamento.valor_produto}
+                    onChange={(event) =>
+                      setNovoOrcamento((prev) => ({ ...prev, valor_produto: event.target.value }))
+                    }
+                    sx={{ '& .MuiOutlinedInput-root': { borderRadius: 0 } }}
+                    fullWidth
+                  />
+                </Stack>
+                <Stack direction="row" spacing={2}>
+                  <TextField
+                    label="CNPJ Pagador"
+                    value={novoOrcamento.cnpj_pagador}
+                    onFocus={() =>
+                      setNovoOrcamento((prev) => ({ ...prev, cnpj_pagador: onlyDigits(prev.cnpj_pagador) }))
+                    }
+                    onBlur={() =>
+                      setNovoOrcamento((prev) => ({ ...prev, cnpj_pagador: formatCNPJ(prev.cnpj_pagador) }))
+                    }
+                    onChange={(event) =>
+                      setNovoOrcamento((prev) => ({ ...prev, cnpj_pagador: event.target.value }))
+                    }
+                    sx={{ '& .MuiOutlinedInput-root': { borderRadius: 0 } }}
+                    fullWidth
+                  />
+                  <TextField
+                    label="CNPJ/CPF Destino"
+                    value={novoOrcamento.cnpj_cpf_destino}
+                    onFocus={() =>
+                      setNovoOrcamento((prev) => ({ ...prev, cnpj_cpf_destino: onlyDigits(prev.cnpj_cpf_destino) }))
+                    }
+                    onBlur={() =>
+                      setNovoOrcamento((prev) => ({
+                        ...prev,
+                        cnpj_cpf_destino: formatCnpjOrCpf(prev.cnpj_cpf_destino),
+                      }))
+                    }
+                    onChange={(event) =>
+                      setNovoOrcamento((prev) => ({ ...prev, cnpj_cpf_destino: event.target.value }))
+                    }
+                    sx={{ '& .MuiOutlinedInput-root': { borderRadius: 0 } }}
+                    fullWidth
+                  />
+                </Stack>
+
+                {(novoOrcamento.volumes || []).map((volume: any, idx: number) => (
+                  <Stack direction="row" spacing={1} alignItems="center" key={`volume-${idx}`}>
+                    <Typography sx={{ minWidth: 52, fontWeight: 700 }}>#{idx + 1}</Typography>
+                    <TextField
+                      label="Comprimento (m)"
+                      placeholder="comprimento"
+                      value={volume.comprimento}
+                      onChange={(event) =>
+                        setNovoOrcamento((prev) => {
+                          const newVolumes = [...(prev.volumes || [])];
+                          newVolumes[idx] = { ...newVolumes[idx], comprimento: event.target.value };
+                          return { ...prev, volumes: newVolumes };
+                        })
+                      }
+                      sx={{ '& .MuiOutlinedInput-root': { borderRadius: 0 } }}
+                      fullWidth
+                    />
+                    <TextField
+                      label="Largura (m)"
+                      placeholder="largura"
+                      value={volume.largura}
+                      onChange={(event) =>
+                        setNovoOrcamento((prev) => {
+                          const newVolumes = [...(prev.volumes || [])];
+                          newVolumes[idx] = { ...newVolumes[idx], largura: event.target.value };
+                          return { ...prev, volumes: newVolumes };
+                        })
+                      }
+                      sx={{ '& .MuiOutlinedInput-root': { borderRadius: 0 } }}
+                      fullWidth
+                    />
+                    <TextField
+                      label="Altura (m)"
+                      placeholder="altura"
+                      value={volume.altura}
+                      onChange={(event) =>
+                        setNovoOrcamento((prev) => {
+                          const newVolumes = [...(prev.volumes || [])];
+                          newVolumes[idx] = { ...newVolumes[idx], altura: event.target.value };
+                          return { ...prev, volumes: newVolumes };
+                        })
+                      }
+                      sx={{ '& .MuiOutlinedInput-root': { borderRadius: 0 } }}
+                      fullWidth
+                    />
+                    <TextField
+                      label="Peso (kg)"
+                      placeholder="peso"
+                      value={volume.peso || ''}
+                      onChange={(event) =>
+                        setNovoOrcamento((prev) => {
+                          const newVolumes = [...(prev.volumes || [])];
+                          newVolumes[idx] = { ...newVolumes[idx], peso: event.target.value };
+                          return { ...prev, volumes: newVolumes };
+                        })
+                      }
+                      sx={{ '& .MuiOutlinedInput-root': { borderRadius: 0 } }}
+                      type="text"
+                      fullWidth
+                    />
+                    <IconButton
+                      aria-label={`Remover volume ${idx + 1}`}
+                      size="small"
+                      color="error"
+                      onClick={() =>
+                        setNovoOrcamento((prev) => {
+                          const newVolumes = [...(prev.volumes || [])];
+                          newVolumes.splice(idx, 1);
+                          return {
+                            ...prev,
+                            volumes:
+                              newVolumes.length > 0
+                                ? newVolumes
+                                : [{ comprimento: '', largura: '', altura: '', peso: '' }],
+                          };
+                        })
+                      }
+                    >
+                      <Delete fontSize="small" />
+                    </IconButton>
+                  </Stack>
+                ))}
+                <Button
+                  variant="text"
+                  onClick={() =>
+                    setNovoOrcamento((prev) => ({
+                      ...prev,
+                      volumes: [...(prev.volumes || []), { comprimento: '', largura: '', altura: '', peso: '' }],
+                    }))
+                  }
+                  sx={{ padding: 0, alignSelf: 'flex-start', textTransform: 'none' }}>
+                  + Adicionar volume
+                </Button>
+                <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                  Volumes: {volumesAgregados.count} | Volume agregado: {volumesAgregados.totalVolume.toFixed(3)} m³ | Peso agregado: {volumesAgregados.totalPeso.toFixed(3)} kg
+                </Typography>
                 {orcamentoSelecionadoId ? (
-                  <Stack direction="row" spacing={1.5}>
+                  <Stack direction="row" spacing={1.5} flexWrap="wrap">
                     <Button
                       variant="contained"
                       onClick={handleSalvarEdicaoOrcamento}
@@ -2676,6 +3324,15 @@ const App = () => {
                       sx={{ borderRadius: '14px', textTransform: 'none' }}
                     >
                       {savingEdicaoOrcamento ? 'Salvando...' : 'Salvar alterações'}
+                    </Button>
+                    <Button
+                      variant="outlined"
+                      startIcon={<Email />}
+                      onClick={handleOpenEnviarOrcamentoModal}
+                      disabled={!orcamentoDetalhe?.ativo || sendingOrcamentoEmail}
+                      sx={{ borderRadius: '14px', textTransform: 'none' }}
+                    >
+                      Enviar e-mails em massa
                     </Button>
                     <Button
                       variant="outlined"
@@ -2890,6 +3547,112 @@ const App = () => {
           </Box>
         )}
       </Container>
+
+      <Dialog
+        open={showEnviarOrcamentoModal}
+        onClose={() => setShowEnviarOrcamentoModal(false)}
+        fullWidth
+        maxWidth="lg"
+      >
+        <DialogTitle>Selecionar transportadoras para envio</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" sx={{ mb: 2 }}>
+            Selecione as transportadoras que devem receber o pedido de orçamento.
+            Itens já enviados antes estão desabilitados, salvo se você ativar o envio forçado.
+          </Typography>
+          <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 2 }}>
+            E-mails já enviados para {orcamentoDetalhe?.transportadoras_enviadas?.length || 0} transportadora(s).
+          </Typography>
+          <Checkbox
+            indeterminate={selectedTransportadoraIds.length > 0 && selectedTransportadoraIds.length < transportadoras.length}
+            checked={selectedTransportadoraIds.length === transportadoras.length}
+            onChange={() => {
+              const allSelectableIds = transportadoras
+                .filter((item) => {
+                  const alreadySent = orcamentoDetalhe?.transportadoras_enviadas?.includes(item.id);
+                  const forced = forceSendTransportadoraIds.includes(item.id);
+                  return !(alreadySent && !forced);
+                })
+                .map((item) => item.id);
+
+              if (selectedTransportadoraIds.length === allSelectableIds.length) {
+                setSelectedTransportadoraIds([]);
+              } else {
+                setSelectedTransportadoraIds(allSelectableIds);
+              }
+            }}
+          /> Selecionar/Deselecionar todas
+          <Table size="small">
+            <TableHead>
+              <TableRow sx={tableHeaderRowSx}>
+                <TableCell sx={tableHeaderCellSx}>Selecionar</TableCell>
+                <TableCell sx={tableHeaderCellSx}>Nome</TableCell>
+                <TableCell sx={tableHeaderCellSx}>CNPJ</TableCell>
+                <TableCell sx={tableHeaderCellSx}>Telefone</TableCell>
+                <TableCell sx={tableHeaderCellSx}>E-mail orçamento</TableCell>
+                <TableCell sx={tableHeaderCellSx}>Status</TableCell>
+                <TableCell sx={tableHeaderCellSx}>Ação</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {transportadoras.map((item) => {
+                const alreadySent = orcamentoDetalhe?.transportadoras_enviadas?.includes(item.id);
+                const forced = forceSendTransportadoraIds.includes(item.id);
+                const disabled = alreadySent && !forced;
+
+                return (
+                  <TableRow key={item.id}>
+                    <TableCell sx={{ borderBottom: '1px solid rgba(0,0,0,0.05)' }}>
+                      <Checkbox
+                        checked={selectedTransportadoraIds.includes(item.id)}
+                        disabled={disabled}
+                        onChange={() => handleToggleSelectTransportadora(item.id)}
+                      />
+                    </TableCell>
+                    <TableCell sx={{ borderBottom: '1px solid rgba(0,0,0,0.05)' }}>{item.nome}</TableCell>
+                    <TableCell sx={{ borderBottom: '1px solid rgba(0,0,0,0.05)' }}>{item.cnpj}</TableCell>
+                    <TableCell sx={{ borderBottom: '1px solid rgba(0,0,0,0.05)' }}>{item.telefone}</TableCell>
+                    <TableCell sx={{ borderBottom: '1px solid rgba(0,0,0,0.05)' }}>{item.email_orcamento}</TableCell>
+                    <TableCell sx={{ borderBottom: '1px solid rgba(0,0,0,0.05)' }}>
+                      {alreadySent ? (
+                        <Chip label={forced ? 'Enviado (forçado)' : 'Já enviado'} size="small" color={forced ? 'warning' : 'default'} />
+                      ) : (
+                        <Chip label="Não enviado" size="small" color="primary" />
+                      )}
+                    </TableCell>
+                    <TableCell sx={{ borderBottom: '1px solid rgba(0,0,0,0.05)' }}>
+                      {alreadySent && (
+                        <Button
+                          size="small"
+                          variant={forced ? 'contained' : 'outlined'}
+                          color={forced ? 'error' : 'primary'}
+                          onClick={() => handleToggleForceSendTransportadora(item.id)}
+                          sx={{ textTransform: 'none', borderRadius: '10px' }}
+                        >
+                          {forced ? 'Remover forçar envio' : 'Forçar envio'}
+                        </Button>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setShowEnviarOrcamentoModal(false)} sx={{ textTransform: 'none' }}>
+            Cancelar
+          </Button>
+          <Button
+            variant="contained"
+            onClick={handleEnviarEmailOrcamento}
+            disabled={sendingOrcamentoEmail || selectedTransportadoraIds.length === 0}
+            sx={{ textTransform: 'none' }}
+          >
+            {sendingOrcamentoEmail ? 'Enviando...' : 'Enviar e-mails'}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 };
