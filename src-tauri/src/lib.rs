@@ -1560,15 +1560,17 @@ async fn escolher_proposta_ganhadora(
         .map_err(|e| format!("Erro ao buscar orçamento: {}", e))?
         .ok_or_else(|| "Orçamento não encontrado".to_string())?;
 
-    let existe = orcamento
+    let proposta_ganhadora = orcamento
         .propostas
         .iter()
-        .any(|proposta| proposta.id.as_deref() == Some(proposta_id.as_str()));
+        .find(|proposta| proposta.id.as_deref() == Some(proposta_id.as_str()))
+        .cloned();
 
-    if !existe {
+    if proposta_ganhadora.is_none() {
         return Err("Proposta informada não pertence a este orçamento".to_string());
     }
 
+    let proposta_ganhadora = proposta_ganhadora.unwrap();
     orcamento.proposta_ganhadora_id = Some(proposta_id);
     // Orçamento permanece ativo — só conclui quando o usuário marcar manualmente
 
@@ -1580,6 +1582,47 @@ async fn escolher_proposta_ganhadora(
 
     if update_result.matched_count == 0 {
         return Err("Orçamento não encontrado para atualização".to_string());
+    }
+
+    // Envia e-mail à transportadora vencedora solicitando dados de pagamento e nota fiscal
+    if let Some(transportadora_id) = proposta_ganhadora.transportadora_id {
+        match database
+            .transportadoras
+            .find_one(mongodb::bson::doc! { "_id": transportadora_id })
+            .await
+        {
+            Ok(Some(transportadora)) => {
+                let email_destino = if !transportadora.email_nota.trim().is_empty() {
+                    transportadora.email_nota.trim().to_string()
+                } else {
+                    transportadora.email_orcamento.trim().to_string()
+                };
+
+                if !email_destino.is_empty() {
+                    if let Ok(gmail) = gmail_client::GmailClient::authenticate().await {
+                        let subject = format!(
+                            "Proposta aceita — orçamento {} | Aguardamos dados de pagamento e nota fiscal",
+                            orcamento.descricao
+                        );
+                        let body = format!(
+                            "Olá {},\n\n\
+                            Temos o prazer de informar que sua proposta para o orçamento \"{}\" foi aceita.\n\n\
+                            Para darmos continuidade ao processo, solicitamos que nos envie:\n\
+                            1. Dados bancários para pagamento (banco, agência, conta, CNPJ/CPF e razão social);\n\
+                            2. Nota fiscal referente ao frete (CT-e ou NF-e).\n\n\
+                            Por favor, responda este e-mail com as informações acima o mais breve possível.\n\n\
+                            Obrigado e aguardamos seu retorno.\n",
+                            transportadora.nome,
+                            orcamento.descricao,
+                        );
+                        let _ = gmail.send_email(&email_destino, &subject, &body).await;
+                    }
+                }
+            }
+            Ok(None) | Err(_) => {
+                // Transportadora não encontrada ou erro: não bloqueia o fluxo principal
+            }
+        }
     }
 
     Ok("Proposta ganhadora definida com sucesso".to_string())
