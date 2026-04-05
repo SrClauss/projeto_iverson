@@ -28,7 +28,7 @@ import glassBackground from './assets/glass-background-bordeaux.svg';
 import './App.css';
 
 import { glassPanel } from './styles/glass';
-import { getTodayIso, normalizeDateInput } from './utils/formatters';
+import { getTodayIso, normalizeDateInput, parseCurrency } from './utils/formatters';
 import type {
   FilterKey,
   AppView,
@@ -593,7 +593,7 @@ const App = () => {
     const dataCriacaoNormalizada = normalizeDateInput(novoOrcamento.data_criacao);
     if (!descricao || !novoOrcamento.data_criacao.trim()) { setError('Preencha descrição e data para cadastrar o orçamento.'); return; }
     if (!dataCriacaoNormalizada) { setError('Data inválida. Use dd/mm/aaaa ou aaaa-mm-dd.'); return; }
-    const valorProduto = novoOrcamento.valor_produto ? Number(novoOrcamento.valor_produto.replace(',', '.')) : null;
+    const valorProduto = novoOrcamento.valor_produto ? parseCurrency(novoOrcamento.valor_produto) || null : null;
     const peso = novoOrcamento.peso ? Number(novoOrcamento.peso.replace(',', '.')) : null;
     const volumes = (novoOrcamento.volumes || [])
       .filter((v: any) => v.comprimento || v.largura || v.altura || v.peso)
@@ -617,7 +617,7 @@ const App = () => {
       : null;
     const cnpjPagador = novoOrcamento.cnpj_pagador?.trim() || null;
     const cnpjCpfDestino = novoOrcamento.cnpj_cpf_destino?.trim() || null;
-    if (novoOrcamento.valor_produto && Number.isNaN(valorProduto)) { setError('Valor do produto inválido.'); return; }
+    if (novoOrcamento.valor_produto && (valorProduto === null || Number.isNaN(valorProduto))) { setError('Valor do produto inválido.'); return; }
     if (novoOrcamento.peso && Number.isNaN(peso)) { setError('Peso inválido.'); return; }
     if (volumes.some((vol: any) => Number.isNaN(vol.comprimento) || Number.isNaN(vol.largura) || Number.isNaN(vol.altura))) { setError('Pelo menos um volume possui dimensão inválida.'); return; }
     if (volumes.some((vol: any) => vol.peso !== null && Number.isNaN(vol.peso))) { setError('Pelo menos um volume possui peso inválido.'); return; }
@@ -657,7 +657,7 @@ const App = () => {
     const descricao = novoOrcamento.descricao.trim();
     const dataCriacaoNormalizada = normalizeDateInput(novoOrcamento.data_criacao);
     if (!descricao || !dataCriacaoNormalizada) { setError('Descrição e data válidas são obrigatórias para atualizar o orçamento.'); return; }
-    const valorProduto = novoOrcamento.valor_produto ? Number(novoOrcamento.valor_produto.replace(',', '.')) : null;
+    const valorProduto = novoOrcamento.valor_produto ? parseCurrency(novoOrcamento.valor_produto) || null : null;
     const peso = novoOrcamento.peso ? Number(novoOrcamento.peso.replace(',', '.')) : null;
     const volumes = (novoOrcamento.volumes || [])
       .filter((v: any) => v.comprimento || v.largura || v.altura || v.peso)
@@ -679,7 +679,7 @@ const App = () => {
           altura: Number(novoOrcamento.dimensoes.altura.replace(',', '.')),
         }
       : null;
-    if (novoOrcamento.valor_produto && Number.isNaN(valorProduto)) { setError('Valor do produto inválido.'); return; }
+    if (novoOrcamento.valor_produto && (valorProduto === null || Number.isNaN(valorProduto))) { setError('Valor do produto inválido.'); return; }
     if (novoOrcamento.peso && Number.isNaN(peso)) { setError('Peso inválido.'); return; }
     setSavingEdicaoOrcamento(true);
     try {
@@ -702,7 +702,7 @@ const App = () => {
   const handleAdicionarPropostaManual = async () => {
     if (!orcamentoSelecionadoId) return;
     setError(null);
-    const valorProposta = Number(novaProposta.valor_proposta.replace(',', '.').trim());
+    const valorProposta = parseCurrency(novaProposta.valor_proposta);
     const dataProposta = normalizeDateInput(novaProposta.data_proposta);
     const prazoEntrega = novaProposta.prazo_entrega.trim();
     if (Number.isNaN(valorProposta) || !dataProposta) { setError('Informe valor da proposta e data válidos para cadastrar a proposta.'); return; }

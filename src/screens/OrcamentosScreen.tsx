@@ -34,7 +34,7 @@ import {
   AttachMoney,
 } from '@mui/icons-material';
 import { glassPanel, tableHeaderRowSx, tableHeaderCellSx } from '../styles/glass';
-import { onlyDigits, formatCNPJ, formatCnpjOrCpf, formatCurrencyInput, parseCurrency } from '../utils/formatters';
+import { onlyDigits, formatCNPJ, formatCnpjOrCpf, formatCurrencyInput } from '../utils/formatters';
 import type {
   Transportadora,
   OrcamentoDetalhe,
@@ -191,14 +191,6 @@ const OrcamentosScreen = (props: OrcamentosScreenProps) => {
                 onChange={(event) => {
                   const formatted = formatCurrencyInput(event.target.value);
                   setNovoOrcamento((prev) => ({ ...prev, valor_produto: formatted }));
-                }}
-                onBlur={() => {
-                  if (novoOrcamento.valor_produto) {
-                    const num = parseCurrency(novoOrcamento.valor_produto);
-                    if (!isNaN(num)) {
-                      setNovoOrcamento((prev) => ({ ...prev, valor_produto: String(num) }));
-                    }
-                  }
                 }}
                 sx={{ '& .MuiOutlinedInput-root': { borderRadius: 0 } }}
                 fullWidth
@@ -413,14 +405,6 @@ const OrcamentosScreen = (props: OrcamentosScreenProps) => {
                   onChange={(event) => {
                     const formatted = formatCurrencyInput(event.target.value);
                     setNovaProposta((prev) => ({ ...prev, valor_proposta: formatted }));
-                  }}
-                  onBlur={() => {
-                    if (novaProposta.valor_proposta) {
-                      const num = parseCurrency(novaProposta.valor_proposta);
-                      if (!isNaN(num)) {
-                        setNovaProposta((prev) => ({ ...prev, valor_proposta: String(num) }));
-                      }
-                    }
                   }}
                   sx={{ '& .MuiOutlinedInput-root': { borderRadius: 0 }, flex: 1 }}
                   slotProps={{
