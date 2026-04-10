@@ -1,5 +1,5 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-use base64::{engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD}, Engine as _};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -167,6 +167,11 @@ struct OrcamentoDetalheItem {
     cnpj_pagador: Option<String>,
     cnpj_cpf_destino: Option<String>,
     cep_destino: Option<String>,
+    logradouro_destino: Option<String>,
+    numero_destino: Option<String>,
+    bairro_destino: Option<String>,
+    cidade_destino: Option<String>,
+    uf_destino: Option<String>,
     endereco_destino: Option<String>,
     nota: Option<String>,
     valor_produto: Option<f64>,
@@ -305,6 +310,11 @@ async fn map_orcamento_to_detalhe(
         cnpj_pagador: orcamento.cnpj_pagador,
         cnpj_cpf_destino: orcamento.cnpj_cpf_destino,
         cep_destino: orcamento.cep_destino,
+        logradouro_destino: orcamento.logradouro_destino,
+        numero_destino: orcamento.numero_destino,
+        bairro_destino: orcamento.bairro_destino,
+        cidade_destino: orcamento.cidade_destino,
+        uf_destino: orcamento.uf_destino,
         endereco_destino: orcamento.endereco_destino,
         nota: orcamento.nota,
         valor_produto: orcamento.valor_produto,
@@ -1382,6 +1392,11 @@ async fn update_orcamento_basico(
     cnpj_pagador: Option<String>,
     cnpj_cpf_destino: Option<String>,
     cep_destino: Option<String>,
+    logradouro_destino: Option<String>,
+    numero_destino: Option<String>,
+    bairro_destino: Option<String>,
+    cidade_destino: Option<String>,
+    uf_destino: Option<String>,
     endereco_destino: Option<String>,
     nota: Option<String>,
     valor_produto: Option<f64>,
@@ -1421,6 +1436,11 @@ async fn update_orcamento_basico(
     set_doc.insert("cnpj_pagador", cnpj_pagador);
     set_doc.insert("cnpj_cpf_destino", cnpj_cpf_destino);
     set_doc.insert("cep_destino", cep_destino);
+    set_doc.insert("logradouro_destino", logradouro_destino);
+    set_doc.insert("numero_destino", numero_destino);
+    set_doc.insert("bairro_destino", bairro_destino);
+    set_doc.insert("cidade_destino", cidade_destino);
+    set_doc.insert("uf_destino", uf_destino);
     set_doc.insert("endereco_destino", endereco_destino);
     set_doc.insert("nota", nota);
     set_doc.insert("valor_produto", valor_produto);
@@ -2602,6 +2622,18 @@ fn extrair_numero_nf_da_chave(chave: &str) -> String {
     }
 }
 
+fn calcular_volume_orcamento_m3(orcamento: &db::models::Orcamento) -> f64 {
+    if let Some(volumes) = &orcamento.volumes {
+        volumes.iter()
+            .map(|v| v.comprimento * v.largura * v.altura)
+            .sum()
+    } else if let Some(dimensoes) = &orcamento.dimensoes {
+        dimensoes.comprimento * dimensoes.largura * dimensoes.altura
+    } else {
+        0.0
+    }
+}
+
 /// Compares a CT-e XML against an orcamento, returning field-by-field comparison.
 #[tauri::command]
 async fn comparar_cte_xml(orcamento_id: String, xml_base64: String) -> Result<serde_json::Value, String> {
@@ -2609,8 +2641,71 @@ async fn comparar_cte_xml(orcamento_id: String, xml_base64: String) -> Result<se
 
     let xml_bytes = STANDARD.decode(&xml_base64)
         .map_err(|e| format!("Erro ao decodificar XML base64: {}", e))?;
+    let xml_text = String::from_utf8_lossy(&xml_bytes).to_string();
 
-    let cte = cte_parser::parse_cte_xml(&xml_bytes)?;
+    let mut cte = cte_parser::parse_cte_xml(&xml_bytes)?;
+
+    let mut missing_fields: Vec<&str> = Vec::new();
+    if cte.cidade_destino.trim().is_empty() { missing_fields.push("cidade_destino"); }
+    if cte.uf_destino.trim().is_empty() { missing_fields.push("uf_destino"); }
+    if cte.xlgr_destino.trim().is_empty() { missing_fields.push("xlgr_destino"); }
+    if cte.nro_destino.trim().is_empty() { missing_fields.push("nro_destino"); }
+    if cte.cep_destino.trim().is_empty() { missing_fields.push("cep_destino"); }
+    if cte.cnpj_remetente.trim().is_empty() { missing_fields.push("cnpj_remetente"); }
+    if cte.chave_nfe.trim().is_empty() { missing_fields.push("chave_nfe"); }
+    if cte.valor_carga <= 0.0 { missing_fields.push("valor_carga"); }
+    if cte.peso_real <= 0.0 { missing_fields.push("peso_real"); }
+    if cte.volume_m3 <= 0.0 { missing_fields.push("volume_m3"); }
+    if cte.qtd_volumes == 0 { missing_fields.push("qtd_volumes"); }
+
+    if !missing_fields.is_empty() {
+        println!("[comparar_cte_xml] Campos faltantes no XML: {:?}", missing_fields);
+        if let Ok(inferidos) = gemini_client::inferir_campos_cte(&xml_text, &missing_fields).await {
+            if let Some(value) = inferidos.get("cidade_destino").filter(|v| !v.trim().is_empty()) {
+                cte.cidade_destino = value.clone();
+            }
+            if let Some(value) = inferidos.get("uf_destino").filter(|v| !v.trim().is_empty()) {
+                cte.uf_destino = value.clone();
+            }
+            if let Some(value) = inferidos.get("xlgr_destino").filter(|v| !v.trim().is_empty()) {
+                cte.xlgr_destino = value.clone();
+            }
+            if let Some(value) = inferidos.get("nro_destino").filter(|v| !v.trim().is_empty()) {
+                cte.nro_destino = value.clone();
+            }
+            if let Some(value) = inferidos.get("cep_destino").filter(|v| !v.trim().is_empty()) {
+                cte.cep_destino = value.clone();
+            }
+            if let Some(value) = inferidos.get("cnpj_remetente").filter(|v| !v.trim().is_empty()) {
+                cte.cnpj_remetente = value.clone();
+            }
+            if let Some(value) = inferidos.get("chave_nfe").filter(|v| !v.trim().is_empty()) {
+                cte.chave_nfe = value.clone();
+            }
+            if let Some(value) = inferidos.get("valor_carga").filter(|v| !v.trim().is_empty()) {
+                if let Ok(parsed) = value.trim().replace(',', ".").parse::<f64>() {
+                    cte.valor_carga = parsed;
+                }
+            }
+            if let Some(value) = inferidos.get("peso_real").filter(|v| !v.trim().is_empty()) {
+                if let Ok(parsed) = value.trim().replace(',', ".").parse::<f64>() {
+                    cte.peso_real = parsed;
+                }
+            }
+            if let Some(value) = inferidos.get("volume_m3").filter(|v| !v.trim().is_empty()) {
+                if let Ok(parsed) = value.trim().replace(',', ".").parse::<f64>() {
+                    cte.volume_m3 = parsed;
+                }
+            }
+            if let Some(value) = inferidos.get("qtd_volumes").filter(|v| !v.trim().is_empty()) {
+                if let Ok(parsed) = value.trim().parse::<u32>() {
+                    cte.qtd_volumes = parsed;
+                }
+            }
+        } else {
+            println!("[comparar_cte_xml] Falha no fallback de IA para campos faltantes");
+        }
+    }
 
     let database = db::get_database().await?;
     let orcamento_oid = mongodb::bson::oid::ObjectId::parse_str(&orcamento_id)
@@ -2654,44 +2749,64 @@ async fn comparar_cte_xml(orcamento_id: String, xml_base64: String) -> Result<se
     }));
 
     // Cidade destino
-    let cidade_orc = orcamento.endereco_destino.as_deref().unwrap_or("").to_lowercase();
+    let cidade_orc = orcamento.cidade_destino.as_deref().unwrap_or(orcamento.endereco_destino.as_deref().unwrap_or("")).to_lowercase();
     let cidade_xml_lower = cte.cidade_destino.to_lowercase();
     let div = !cidade_xml_lower.is_empty() && !cidade_orc.is_empty()
         && !cidade_orc.contains(&cidade_xml_lower);
     if div { tem_divergencia = true; }
     campos.push(serde_json::json!({
         "campo": "Cidade Destino",
-        "valor_orcamento": orcamento.endereco_destino.as_deref().unwrap_or("-"),
+        "valor_orcamento": orcamento.cidade_destino.as_deref().unwrap_or(orcamento.endereco_destino.as_deref().unwrap_or("-")),
         "valor_xml": &cte.cidade_destino,
         "divergente": div
     }));
 
-    // UF destino (informativo, no divergence check needed)
+    // UF destino
+    let uf_orc = orcamento.uf_destino.as_deref().unwrap_or("").trim().to_uppercase();
+    let uf_xml = cte.uf_destino.trim().to_uppercase();
+    let div = !uf_orc.is_empty() && !uf_xml.is_empty() && uf_orc != uf_xml;
+    if div { tem_divergencia = true; }
     campos.push(serde_json::json!({
-        "campo": "UF Destino (XML)",
-        "valor_orcamento": "-",
+        "campo": "UF Destino",
+        "valor_orcamento": orcamento.uf_destino.as_deref().unwrap_or("-"),
         "valor_xml": &cte.uf_destino,
+        "divergente": div
+    }));
+
+    // Bairro destino
+    campos.push(serde_json::json!({
+        "campo": "Bairro Destino",
+        "valor_orcamento": orcamento.bairro_destino.as_deref().unwrap_or("-"),
+        "valor_xml": "-",
         "divergente": false
     }));
 
-    // Rua destino (informativo)
+    // Rua destino
+    let rua_orc = orcamento.logradouro_destino.as_deref().unwrap_or("").trim().to_lowercase();
+    let rua_xml = cte.xlgr_destino.trim().to_lowercase();
+    let div = !rua_orc.is_empty() && !rua_xml.is_empty() && rua_orc != rua_xml;
+    if div { tem_divergencia = true; }
     campos.push(serde_json::json!({
-        "campo": "Rua Destino (XML)",
-        "valor_orcamento": orcamento.endereco_destino.as_deref().unwrap_or("-"),
+        "campo": "Rua Destino",
+        "valor_orcamento": orcamento.logradouro_destino.as_deref().unwrap_or("-"),
         "valor_xml": &cte.xlgr_destino,
-        "divergente": false
+        "divergente": div
     }));
 
-    // Número destino (informativo)
+    // Número destino
+    let numero_orc = orcamento.numero_destino.as_deref().unwrap_or("").trim().to_lowercase();
+    let numero_xml = cte.nro_destino.trim().to_lowercase();
+    let div = !numero_orc.is_empty() && !numero_xml.is_empty() && numero_orc != numero_xml;
+    if div { tem_divergencia = true; }
     campos.push(serde_json::json!({
-        "campo": "Número Destino (XML)",
-        "valor_orcamento": "-",
+        "campo": "Número Destino",
+        "valor_orcamento": orcamento.numero_destino.as_deref().unwrap_or("-"),
         "valor_xml": &cte.nro_destino,
-        "divergente": false
+        "divergente": div
     }));
 
     // Peso
-    let peso_orc = orcamento.peso.unwrap_or(0.0);
+    let peso_orc = orcamento.peso_total.or(orcamento.peso).unwrap_or(0.0);
     let div = peso_orc > 0.0 && cte.peso_real > 0.0 && (peso_orc - cte.peso_real).abs() > 0.5;
     if div { tem_divergencia = true; }
     campos.push(serde_json::json!({
@@ -2702,11 +2817,14 @@ async fn comparar_cte_xml(orcamento_id: String, xml_base64: String) -> Result<se
     }));
 
     // Volume m³
+    let volume_orc = calcular_volume_orcamento_m3(&orcamento);
+    let div = volume_orc > 0.0 && cte.volume_m3 > 0.0 && (volume_orc - cte.volume_m3).abs() > 0.01;
+    if div { tem_divergencia = true; }
     campos.push(serde_json::json!({
-        "campo": "Volume m³ (XML)",
-        "valor_orcamento": "-",
+        "campo": "Volume m³",
+        "valor_orcamento": if volume_orc > 0.0 { format!("{:.4}", volume_orc) } else { "-".to_string() },
         "valor_xml": if cte.volume_m3 > 0.0 { format!("{:.4}", cte.volume_m3) } else { "-".to_string() },
-        "divergente": false
+        "divergente": div
     }));
 
     // Qtd Volumes

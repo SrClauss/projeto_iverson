@@ -1,5 +1,6 @@
 use base64::{engine::general_purpose::{URL_SAFE_NO_PAD, URL_SAFE, STANDARD, STANDARD_NO_PAD}, Engine as _};
 use serde::Deserialize;
+use serde_json::json;
 
 // ── Structs ──────────────────────────────────────────────────
 
@@ -125,73 +126,6 @@ pub fn decode_gmail_body_bytes(data: &str) -> Option<Vec<u8>> {
         .ok()
 }
 
-fn decode_rfc2047_word(encoded: &str) -> Option<String> {
-    if !encoded.starts_with("=?") || !encoded.ends_with("?=") {
-        return None;
-    }
-
-    let inner = &encoded[2..encoded.len() - 2];
-    let parts: Vec<&str> = inner.split('?').collect();
-    if parts.len() != 3 {
-        return None;
-    }
-
-    let charset = parts[0];
-    let encoding = parts[1].to_uppercase();
-    let text = parts[2];
-
-    let bytes = match encoding.as_str() {
-        "B" => STANDARD.decode(text).ok()?,
-        "Q" => {
-            let mut result = Vec::new();
-            let mut chars = text.chars();
-            while let Some(ch) = chars.next() {
-                if ch == '_' {
-                    result.push(b' ');
-                } else if ch == '=' {
-                    let hi = chars.next()?;
-                    let lo = chars.next()?;
-                    let hex = format!("{}{}", hi, lo);
-                    let byte = u8::from_str_radix(&hex, 16).ok()?;
-                    result.push(byte);
-                } else {
-                    result.extend(ch.to_string().as_bytes());
-                }
-            }
-            result
-        }
-        _ => return None,
-    };
-
-    if charset.eq_ignore_ascii_case("UTF-8") {
-        return String::from_utf8(bytes).ok();
-    }
-
-    String::from_utf8(bytes).ok()
-}
-
-fn decode_rfc2047_header(value: &str) -> String {
-    let mut decoded = String::new();
-    let mut remaining = value;
-
-    while let Some(start) = remaining.find("=?") {
-        decoded.push_str(&remaining[..start]);
-        if let Some(end_offset) = remaining[start + 2..].find("?=") {
-            let end = start + 2 + end_offset;
-            let token = &remaining[start..=end + 1];
-            if let Some(text) = decode_rfc2047_word(token) {
-                decoded.push_str(&text);
-                remaining = &remaining[end + 2..];
-                continue;
-            }
-        }
-        decoded.push_str(&remaining[start..]);
-        return decoded;
-    }
-
-    decoded.push_str(remaining);
-    decoded
-}
 
 pub fn extract_plain_text_body(part: &GmailMessagePart) -> Option<String> {
     let is_attachment = part
@@ -414,6 +348,36 @@ impl GmailClient {
 
         serde_json::from_str(&body)
             .map_err(|e| format!("JSON inválido para email {}: {}", message_id, e))
+    }
+
+    pub async fn mark_message_as_read(&self, message_id: &str) -> Result<(), String> {
+        let url = format!(
+            "https://gmail.googleapis.com/gmail/v1/users/me/messages/{}/modify",
+            message_id
+        );
+
+        let payload = json!({
+            "removeLabelIds": ["UNREAD"]
+        });
+
+        let response = self
+            .http
+            .post(&url)
+            .bearer_auth(&self.access_token)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| format!("Erro ao marcar email como lido {}: {}", message_id, e))?;
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+
+        if !status.is_success() {
+            eprintln!("[GmailClient] falha ao marcar mensagem {} como lida: status={} body={}", message_id, status, body);
+            return Err(format!("Erro Gmail modify ({}): {}", status, body));
+        }
+
+        Ok(())
     }
 
     /// Download de um attachment pelo ID

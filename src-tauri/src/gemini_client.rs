@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use std::collections::HashMap;
 
 // ── Structs ──────────────────────────────────────────────────
 
@@ -87,6 +88,53 @@ pub async fn call_gemini(prompt: &str) -> Result<String, String> {
         })
         .map(|t| t.to_string())
         .ok_or_else(|| "Gemini não retornou texto".to_string())
+}
+
+/// Analisa um XML CT-e e retorna os valores dos campos que o parser não conseguiu extrair.
+pub async fn inferir_campos_cte(
+    xml: &str,
+    campos_faltantes: &[&str],
+) -> Result<HashMap<String, String>, String> {
+    let campos_texto = campos_faltantes.join(", ");
+    let prompt = format!(
+        r#"Você é um assistente especializado em CT-e.
+Eu tenho um XML de CT-e e preciso que você identifique os valores dos campos listados abaixo.
+Responda APENAS com um objeto JSON válido, onde cada chave é o nome do campo e o valor é o valor extraído.
+Se não encontrar algum campo, retorne string vazia para ele.
+
+Campos faltantes:
+{}
+
+XML:
+{}"#,
+        campos_texto, xml
+    );
+
+    let resposta = call_gemini(&prompt).await?;
+    let resposta = resposta.trim();
+
+    let parsed: serde_json::Value = serde_json::from_str(resposta)
+        .map_err(|e| format!("Gemini retornou JSON inválido: {} | resposta: {}", e, resposta))?;
+
+    let obj = parsed.as_object().ok_or_else(|| {
+        format!("Gemini retornou JSON não-objeto: {}", resposta)
+    })?;
+
+    let mut result = HashMap::new();
+    for &campo in campos_faltantes {
+        let valor = obj.get(campo)
+            .map(|v| {
+                if let Some(s) = v.as_str() {
+                    s.to_string()
+                } else {
+                    v.to_string()
+                }
+            })
+            .unwrap_or_default();
+        result.insert(campo.to_string(), valor);
+    }
+
+    Ok(result)
 }
 
 /// Extrai valor de frete em centavos e prazo de entrega de um email de cotação usando Gemini.
@@ -204,7 +252,7 @@ pub async fn identificar_orcamento(
         r#"Você é um sistema automatizado de logística. Uma transportadora enviou um email com uma cotação de frete.
 Sua tarefa é decidir QUAL orçamento da lista abaixo esta cotação se refere.
 
-Você DEVE escolher a melhor opção. Analise o conteúdo do email (menção a cidades, produtos, pesos, destinos) e compare com os parâmetros de cada orçamento: CNPJ pagador, CNPJ/CPF destino, CEP de destino, endereço de destino, nota, valor do produto, quantidade de volumes, dimensões de volumes ou produto, peso e peso total. NÃO use apenas a descrição.
+O primeiro critério a ser analisado é o número da cotação do orçamento. Após isso, compare o conteúdo do email com os demais parâmetros: CNPJ pagador, CNPJ/CPF destino, CEP de destino, endereço de destino, nota, valor do produto, quantidade de volumes, dimensões de volumes ou produto, peso e peso total. NÃO use apenas a descrição.
 
 Responda SOMENTE com o número da opção escolhida (ex: "1" ou "3"). Nunca responda com texto adicional.
 Se houver dúvida entre opções, escolha a mais provável. Você PRECISA escolher uma.

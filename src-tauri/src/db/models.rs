@@ -53,6 +53,16 @@ pub struct Orcamento {
     #[serde(default)]
     pub cep_destino: Option<String>,
     #[serde(default)]
+    pub logradouro_destino: Option<String>,
+    #[serde(default)]
+    pub numero_destino: Option<String>,
+    #[serde(default)]
+    pub bairro_destino: Option<String>,
+    #[serde(default)]
+    pub cidade_destino: Option<String>,
+    #[serde(default)]
+    pub uf_destino: Option<String>,
+    #[serde(default)]
     pub endereco_destino: Option<String>,
     #[serde(default)]
     pub nota: Option<String>,

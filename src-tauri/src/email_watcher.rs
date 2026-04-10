@@ -190,12 +190,12 @@ async fn poll_once(status: &Arc<Mutex<WatcherStatus>>) -> Result<(), String> {
         return Ok(());
     }
 
-    // 3. Montar query Gmail com todos os emails das transportadoras
+    // 3. Montar query Gmail com todos os emails das transportadoras, apenas não lidos
     let emails_query: Vec<String> = email_to_transportadora
         .keys()
         .map(|e| format!("from:{}", e))
         .collect();
-    let query = format!("({}) newer_than:1d", emails_query.join(" OR "));
+    let query = format!("({}) is:unread newer_than:1d", emails_query.join(" OR "));
 
     // 4. Autenticar e buscar emails
     let gmail = GmailClient::authenticate().await?;
@@ -331,6 +331,10 @@ async fn poll_once(status: &Arc<Mutex<WatcherStatus>>) -> Result<(), String> {
                 )
                 .await;
             }
+        }
+
+        if let Err(e) = gmail.mark_message_as_read(msg_id).await {
+            eprintln!("[EmailWatcher] Erro ao marcar email {} como lido: {}", msg_id, e);
         }
     }
 
@@ -802,7 +806,13 @@ async fn buscar_orcamentos_ativos(database: &db::Database) -> Vec<(ObjectId, db:
 fn campos_orcamento_para_texto(orc: &db::models::Orcamento) -> String {
     let mut partes: Vec<String> = Vec::new();
 
-    partes.push(format!("Descrição: {}", orc.descricao));
+    let numero_cotacao = orc.numero_cotacao.as_deref().unwrap_or("").trim();
+    if !numero_cotacao.is_empty() {
+        partes.push(format!("Cotação: {}", numero_cotacao));
+    } else {
+        partes.push(format!("Descrição: {}", orc.descricao));
+    }
+
     if let Some(cep) = &orc.cep_destino {
         if !cep.trim().is_empty() {
             partes.push(format!("CEP destino: {}", cep.trim()));
@@ -851,6 +861,31 @@ fn campos_orcamento_para_texto(orc: &db::models::Orcamento) -> String {
     if let Some(cep) = &orc.cep_destino {
         if !cep.trim().is_empty() {
             partes.push(format!("CEP destino: {}", cep.trim()));
+        }
+    }
+    if let Some(logradouro) = &orc.logradouro_destino {
+        if !logradouro.trim().is_empty() {
+            partes.push(format!("Logradouro destino: {}", logradouro.trim()));
+        }
+    }
+    if let Some(numero) = &orc.numero_destino {
+        if !numero.trim().is_empty() {
+            partes.push(format!("Número destino: {}", numero.trim()));
+        }
+    }
+    if let Some(bairro) = &orc.bairro_destino {
+        if !bairro.trim().is_empty() {
+            partes.push(format!("Bairro destino: {}", bairro.trim()));
+        }
+    }
+    if let Some(cidade) = &orc.cidade_destino {
+        if !cidade.trim().is_empty() {
+            partes.push(format!("Cidade destino: {}", cidade.trim()));
+        }
+    }
+    if let Some(uf) = &orc.uf_destino {
+        if !uf.trim().is_empty() {
+            partes.push(format!("UF destino: {}", uf.trim()));
         }
     }
     if let Some(endereco) = &orc.endereco_destino {
@@ -903,6 +938,17 @@ fn match_orcamento_por_parametros(
                 let endereco_lower = endereco.to_lowercase();
                 if subject_lower.contains(&endereco_lower) || body_lower.contains(&endereco_lower) {
                     return Some((*id, campos_orcamento_para_texto(orc)));
+                }
+            }
+        }
+
+        for campo in [&orc.logradouro_destino, &orc.numero_destino, &orc.bairro_destino, &orc.cidade_destino, &orc.uf_destino] {
+            if let Some(valor) = campo {
+                if !valor.trim().is_empty() {
+                    let valor_lower = valor.to_lowercase();
+                    if subject_lower.contains(&valor_lower) || body_lower.contains(&valor_lower) {
+                        return Some((*id, campos_orcamento_para_texto(orc)));
+                    }
                 }
             }
         }
