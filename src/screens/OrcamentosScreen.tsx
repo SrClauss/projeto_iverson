@@ -218,7 +218,7 @@ const OrcamentosScreen = (props: OrcamentosScreenProps) => {
                   }
                 >
                   <MenuItem value="">— Selecione —</MenuItem>
-                  <MenuItem value="23215217000147">23.215.217/0001-47</MenuItem>
+                  <MenuItem value="23215217000114">23.215.217/0001-14</MenuItem>
                   <MenuItem value="51540489000125">51.540.489/0001-25</MenuItem>
                 </Select>
               </FormControl>
