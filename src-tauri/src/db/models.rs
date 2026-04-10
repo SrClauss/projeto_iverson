@@ -41,6 +41,10 @@ pub struct Orcamento {
     #[serde(rename = "_id", skip_serializing_if = "Option::is_none")]
     pub id: Option<ObjectId>,
     pub descricao: String,
+    #[serde(default)]
+    pub numero_nota: Option<String>,
+    #[serde(default)]
+    pub numero_cotacao: Option<String>,
     pub data_criacao: String,
     #[serde(default)]
     pub cnpj_pagador: Option<String>,
@@ -77,6 +81,22 @@ pub struct Orcamento {
     /// true = sem divergência pendente ou divergência já tratada; false = divergência aberta
     #[serde(default = "default_false")]
     pub divergencia_tratada: bool,
+    /// "pendente" | "email_enviado" | "correcao_recebida" | "finalizada"
+    #[serde(default = "default_divergencia_status")]
+    pub divergencia_email_status: String,
+    /// Campos identificados como divergentes
+    #[serde(default)]
+    pub divergencia_campos: Vec<String>,
+    /// Conteúdo do email de correção recebido da transportadora
+    #[serde(default)]
+    pub divergencia_email_correcao: Option<String>,
+    /// Timestamp ISO de quando o email de divergência foi enviado
+    #[serde(default)]
+    pub divergencia_email_enviado_em: Option<String>,
+}
+
+fn default_divergencia_status() -> String {
+    "pendente".to_string()
 }
 
 impl Orcamento {

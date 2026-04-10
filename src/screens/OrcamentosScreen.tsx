@@ -34,7 +34,7 @@ import {
   AttachMoney,
 } from '@mui/icons-material';
 import { glassPanel, tableHeaderRowSx, tableHeaderCellSx } from '../styles/glass';
-import { onlyDigits, formatCNPJ, formatCnpjOrCpf, formatCurrencyInput } from '../utils/formatters';
+import { onlyDigits, formatCnpjOrCpf, formatCurrencyInput } from '../utils/formatters';
 import type {
   Transportadora,
   OrcamentoDetalhe,
@@ -131,14 +131,25 @@ const OrcamentosScreen = (props: OrcamentosScreenProps) => {
           <Stack spacing={2}>
             <Stack direction="row" spacing={2}>
               <TextField
-                label="Descrição"
-                value={novoOrcamento.descricao}
+                label="Número de Nota"
+                value={novoOrcamento.numero_nota}
                 onChange={(event) =>
-                  setNovoOrcamento((prev) => ({ ...prev, descricao: event.target.value }))
+                  setNovoOrcamento((prev) => ({ ...prev, numero_nota: event.target.value }))
                 }
                 sx={{ '& .MuiOutlinedInput-root': { borderRadius: 0 } }}
                 fullWidth
               />
+              <TextField
+                label="Número de Cotação"
+                value={novoOrcamento.numero_cotacao}
+                onChange={(event) =>
+                  setNovoOrcamento((prev) => ({ ...prev, numero_cotacao: event.target.value }))
+                }
+                sx={{ '& .MuiOutlinedInput-root': { borderRadius: 0 } }}
+                fullWidth
+              />
+            </Stack>
+            <Stack direction="row" spacing={2}>
               <TextField
                 label="Data de criação"
                 type="date"
@@ -197,21 +208,20 @@ const OrcamentosScreen = (props: OrcamentosScreenProps) => {
               />
             </Stack>
             <Stack direction="row" spacing={2}>
-              <TextField
-                label="CNPJ Pagador"
-                value={novoOrcamento.cnpj_pagador}
-                onFocus={() =>
-                  setNovoOrcamento((prev) => ({ ...prev, cnpj_pagador: onlyDigits(prev.cnpj_pagador) }))
-                }
-                onBlur={() =>
-                  setNovoOrcamento((prev) => ({ ...prev, cnpj_pagador: formatCNPJ(prev.cnpj_pagador) }))
-                }
-                onChange={(event) =>
-                  setNovoOrcamento((prev) => ({ ...prev, cnpj_pagador: event.target.value }))
-                }
-                sx={{ '& .MuiOutlinedInput-root': { borderRadius: 0 } }}
-                fullWidth
-              />
+              <FormControl fullWidth sx={{ '& .MuiOutlinedInput-root': { borderRadius: 0 } }}>
+                <InputLabel>CNPJ do Remetente</InputLabel>
+                <Select
+                  label="CNPJ do Remetente"
+                  value={novoOrcamento.cnpj_pagador}
+                  onChange={(event) =>
+                    setNovoOrcamento((prev) => ({ ...prev, cnpj_pagador: event.target.value as string }))
+                  }
+                >
+                  <MenuItem value="">— Selecione —</MenuItem>
+                  <MenuItem value="23215217000114">23.215.217/0001-14</MenuItem>
+                  <MenuItem value="51540489000125">51.540.489/0001-25</MenuItem>
+                </Select>
+              </FormControl>
               <TextField
                 label="CNPJ/CPF Destino"
                 value={novoOrcamento.cnpj_cpf_destino}
