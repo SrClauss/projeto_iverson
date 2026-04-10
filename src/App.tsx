@@ -68,7 +68,7 @@ const App = () => {
   const [savingEdicaoOrcamento, setSavingEdicaoOrcamento] = useState(false);
   const [detalheLoading, setDetalheLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [filterType, setFilterType] = useState<FilterKey>('descricao');
+  const [filterType, setFilterType] = useState<FilterKey>('numero_nota');
   const [mostrarInativos, setMostrarInativos] = useState(false);
   const [descricao, setDescricao] = useState('');
   const [valorMin, setValorMin] = useState('');
@@ -93,7 +93,8 @@ const App = () => {
   const [editandoTransportadora, setEditandoTransportadora] = useState(false);
   const [transportadoraEmEdicao, setTransportadoraEmEdicao] = useState<Transportadora | null>(null);
   const [novoOrcamento, setNovoOrcamento] = useState<NovoOrcamentoForm>({
-    descricao: '',
+    numero_nota: '',
+    numero_cotacao: '',
     data_criacao: getTodayIso(),
     cnpj_pagador: '',
     cnpj_cpf_destino: '',
@@ -380,7 +381,8 @@ const App = () => {
       const detalhe = await invoke<OrcamentoDetalhe>('get_orcamento_detalhe', { orcamentoId });
       setOrcamentoDetalhe(detalhe);
       setNovoOrcamento({
-        descricao: detalhe.descricao,
+        numero_nota: detalhe.numero_nota || '',
+        numero_cotacao: detalhe.numero_cotacao || '',
         data_criacao: detalhe.data_criacao,
         cnpj_pagador: detalhe.cnpj_pagador || '',
         cnpj_cpf_destino: detalhe.cnpj_cpf_destino || '',
@@ -420,7 +422,8 @@ const App = () => {
     setOrcamentoSelecionadoId(null);
     setOrcamentoDetalhe(null);
     setNovoOrcamento({
-      descricao: '',
+      numero_nota: '',
+      numero_cotacao: '',
       data_criacao: getTodayIso(),
       cnpj_pagador: '',
       cnpj_cpf_destino: '',
@@ -505,16 +508,17 @@ const App = () => {
     setSuccessMessage(null);
     if (!orcamentoSelecionadoId) { setError('Abra um orçamento existente para enviar e-mails.'); return; }
     if (selectedTransportadoraIds.length === 0) { setError('Selecione ao menos uma transportadora.'); return; }
-    if (!novoOrcamento.descricao.trim() || !novoOrcamento.nota.trim() || !novoOrcamento.valor_produto.trim()) {
-      setError('Preencha descrição, nota e valor do produto antes de enviar.');
+    if (!novoOrcamento.numero_nota.trim() && !novoOrcamento.numero_cotacao.trim() || !novoOrcamento.nota.trim() || !novoOrcamento.valor_produto.trim()) {
+      setError('Preencha número de nota/cotação, nota e valor do produto antes de enviar.');
       return;
     }
     setSendingOrcamentoEmail(true);
     try {
+      const descricao = `NF:${novoOrcamento.numero_nota.trim()} / COT:${novoOrcamento.numero_cotacao.trim()}`;
       const response = await invoke<string>('send_orcamento_request_email', {
         orcamentoId: orcamentoSelecionadoId,
         transportadoraIds: selectedTransportadoraIds,
-        descricao: novoOrcamento.descricao.trim(),
+        descricao,
         nota: novoOrcamento.nota.trim(),
         valorProduto: novoOrcamento.valor_produto.trim(),
         peso: novoOrcamento.peso.trim(),
@@ -589,9 +593,11 @@ const App = () => {
 
   const handleSalvarOrcamento = async () => {
     setError(null);
-    const descricao = novoOrcamento.descricao.trim();
+    const numeroNota = novoOrcamento.numero_nota.trim();
+    const numeroCotacao = novoOrcamento.numero_cotacao.trim();
     const dataCriacaoNormalizada = normalizeDateInput(novoOrcamento.data_criacao);
-    if (!descricao || !novoOrcamento.data_criacao.trim()) { setError('Preencha descrição e data para cadastrar o orçamento.'); return; }
+    if (!numeroNota && !numeroCotacao) { setError('Informe pelo menos o Número de Nota ou o Número de Cotação.'); return; }
+    if (!novoOrcamento.data_criacao.trim()) { setError('Preencha a data para cadastrar o orçamento.'); return; }
     if (!dataCriacaoNormalizada) { setError('Data inválida. Use dd/mm/aaaa ou aaaa-mm-dd.'); return; }
     const valorProduto = novoOrcamento.valor_produto ? parseCurrency(novoOrcamento.valor_produto) || null : null;
     const peso = novoOrcamento.peso ? Number(novoOrcamento.peso.replace(',', '.')) : null;
@@ -623,9 +629,13 @@ const App = () => {
     if (volumes.some((vol: any) => vol.peso !== null && Number.isNaN(vol.peso))) { setError('Pelo menos um volume possui peso inválido.'); return; }
     setSavingOrcamento(true);
     try {
+      const descricao = `NF:${numeroNota} / COT:${numeroCotacao}`;
       const orcamentoId = await invoke<string>('add_orcamento', {
         orcamento: {
-          descricao, data_criacao: dataCriacaoNormalizada, cnpj_pagador: cnpjPagador, cnpj_cpf_destino: cnpjCpfDestino,
+          descricao,
+          numero_nota: numeroNota || null,
+          numero_cotacao: numeroCotacao || null,
+          data_criacao: dataCriacaoNormalizada, cnpj_pagador: cnpjPagador, cnpj_cpf_destino: cnpjCpfDestino,
           cep_destino: novoOrcamento.cep_destino.trim() || null, endereco_destino: novoOrcamento.endereco_destino.trim() || null,
           nota: novoOrcamento.nota.trim() || null, valor_produto: valorProduto,
           volumes: volumes.length > 0 ? volumes : null, dimensoes, peso: peso ?? pesoTotal,
@@ -634,7 +644,7 @@ const App = () => {
       });
       setOrcamentoSelecionadoId(orcamentoId);
       setNovoOrcamento({
-        descricao, data_criacao: dataCriacaoNormalizada,
+        numero_nota: numeroNota, numero_cotacao: numeroCotacao, data_criacao: dataCriacaoNormalizada,
         cnpj_pagador: novoOrcamento.cnpj_pagador, cnpj_cpf_destino: novoOrcamento.cnpj_cpf_destino,
         cep_destino: novoOrcamento.cep_destino, endereco_destino: novoOrcamento.endereco_destino,
         nota: novoOrcamento.nota, valor_produto: novoOrcamento.valor_produto,
@@ -654,9 +664,11 @@ const App = () => {
   const handleSalvarEdicaoOrcamento = async () => {
     if (!orcamentoSelecionadoId) return;
     setError(null);
-    const descricao = novoOrcamento.descricao.trim();
+    const numeroNota = novoOrcamento.numero_nota.trim();
+    const numeroCotacao = novoOrcamento.numero_cotacao.trim();
     const dataCriacaoNormalizada = normalizeDateInput(novoOrcamento.data_criacao);
-    if (!descricao || !dataCriacaoNormalizada) { setError('Descrição e data válidas são obrigatórias para atualizar o orçamento.'); return; }
+    if (!numeroNota && !numeroCotacao) { setError('Informe pelo menos o Número de Nota ou o Número de Cotação.'); return; }
+    if (!dataCriacaoNormalizada) { setError('Data válida é obrigatória para atualizar o orçamento.'); return; }
     const valorProduto = novoOrcamento.valor_produto ? parseCurrency(novoOrcamento.valor_produto) || null : null;
     const peso = novoOrcamento.peso ? Number(novoOrcamento.peso.replace(',', '.')) : null;
     const volumes = (novoOrcamento.volumes || [])
@@ -684,7 +696,11 @@ const App = () => {
     setSavingEdicaoOrcamento(true);
     try {
       await invoke<string>('update_orcamento_basico', {
-        orcamentoId: orcamentoSelecionadoId, descricao, dataCriacao: dataCriacaoNormalizada,
+        orcamentoId: orcamentoSelecionadoId,
+        descricao: null,
+        numeroNota: numeroNota || null,
+        numeroCotacao: numeroCotacao || null,
+        dataCriacao: dataCriacaoNormalizada,
         cnpj_pagador: novoOrcamento.cnpj_pagador.trim() || null, cnpj_cpf_destino: novoOrcamento.cnpj_cpf_destino.trim() || null,
         cep_destino: novoOrcamento.cep_destino.trim() || null, endereco_destino: novoOrcamento.endereco_destino.trim() || null,
         nota: novoOrcamento.nota.trim() || null, valor_produto: valorProduto,
@@ -782,6 +798,11 @@ const App = () => {
       let value = '';
       let filtroDescricao = '';
       switch (filterType) {
+        case 'numero_nota':
+          if (!descricao.trim()) throw new Error('Informe o número de nota para filtrar.');
+          value = descricao.trim();
+          filtroDescricao = `Número de Nota: ${value}`;
+          break;
         case 'descricao':
           if (!descricao.trim()) throw new Error('Informe uma descrição para filtrar.');
           value = descricao.trim();
@@ -846,6 +867,34 @@ const App = () => {
     try {
       await invoke('marcar_divergencia_tratada', { orcamentoId, tratada });
       setOrcamentoDetalhe((prev) => prev ? { ...prev, divergencia_tratada: tratada } : prev);
+      await loadDashboard();
+    } catch (err) {
+      setError(String(err));
+    }
+  };
+
+  const handleEnviarEmailDivergencia = async (orcamentoId: string, camposDivergentes: string[]) => {
+    try {
+      await invoke('enviar_email_divergencia', { orcamentoId, camposDivergentes });
+      await loadDashboard();
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    }
+  };
+
+  const handleFinalizarDivergencia = async (orcamentoId: string) => {
+    try {
+      await invoke('finalizar_divergencia', { orcamentoId });
+      await loadDashboard();
+    } catch (err) {
+      setError(String(err));
+    }
+  };
+
+  const handleReverterDivergencia = async (orcamentoId: string) => {
+    try {
+      await invoke('reverter_divergencia', { orcamentoId });
       await loadDashboard();
     } catch (err) {
       setError(String(err));
@@ -1038,6 +1087,9 @@ const App = () => {
             detalheVolumesAgregados={detalheVolumesAgregados}
             setView={setView} setOrcamentoDetalhe={setOrcamentoDetalhe}
             onMarcarDivergenciaTratada={handleMarcarDivergenciaTratada}
+            onEnviarEmailDivergencia={handleEnviarEmailDivergencia}
+            onFinalizarDivergencia={handleFinalizarDivergencia}
+            onReverterDivergencia={handleReverterDivergencia}
           />
         ) : view === 'relatorios' ? (
           <RelatoriosScreen />

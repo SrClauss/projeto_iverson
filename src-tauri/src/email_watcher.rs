@@ -256,6 +256,27 @@ async fn poll_once(status: &Arc<Mutex<WatcherStatus>>) -> Result<(), String> {
 
         let now_iso = chrono::Utc::now().to_rfc3339();
 
+        // Check for divergence correction reply BEFORE normal flow
+        let subject_lower = subject.to_lowercase();
+        let is_correcao = subject_lower.contains("divergên") || subject_lower.contains("divergen")
+            || subject_lower.contains("correção") || subject_lower.contains("correcao")
+            || subject_lower.contains("re: diverg");
+
+        if is_correcao {
+            processar_correcao_divergencia(
+                &database,
+                msg_id,
+                &subject,
+                &body,
+                &from,
+                transportadora_id,
+                &now_iso,
+                status,
+            )
+            .await;
+            continue;
+        }
+
         // Determinar tipo real (se "ambos", verifica se há orçamento fechado com essa transportadora)
         let tipo_real = if tipo_email == "ambos" {
             classificar_tipo_email(&database, transportadora_id).await
@@ -335,6 +356,103 @@ async fn classificar_tipo_email(database: &db::Database, transportadora_id: Obje
     } else {
         "orcamento".to_string()
     }
+}
+
+// ── Processamento de Correção de Divergência ─────────────────
+
+#[allow(clippy::too_many_arguments)]
+async fn processar_correcao_divergencia(
+    database: &db::Database,
+    msg_id: &str,
+    subject: &str,
+    body: &str,
+    from: &str,
+    transportadora_id: ObjectId,
+    now_iso: &str,
+    status: &Arc<Mutex<WatcherStatus>>,
+) {
+    // Find orcamento with email_enviado divergence for this transportadora
+    let orcamento = match database
+        .orcamentos
+        .find_one(mongodb::bson::doc! {
+            "propostas.transportadora_id": transportadora_id,
+            "divergencia_email_status": { "$in": ["email_enviado", "correcao_recebida"] },
+            "divergencia_tratada": false,
+        })
+        .await
+        .ok()
+        .flatten()
+    {
+        Some(o) => o,
+        None => {
+            let email_doc = db::models::EmailProcessado {
+                id: None,
+                gmail_message_id: msg_id.to_string(),
+                tipo: "correcao_divergencia".to_string(),
+                transportadora_id,
+                transportadora_nome: String::new(),
+                orcamento_id: None,
+                orcamento_descricao: None,
+                processado_em: now_iso.to_string(),
+                status: "erro".to_string(),
+                valor_extraido: None,
+                erro: Some("Nenhum orçamento com divergência pendente para esta transportadora".to_string()),
+                assunto: Some(subject.to_string()),
+                remetente: Some(from.to_string()),
+                prazo_extraido: None,
+            };
+            let _ = database.emails_processados.insert_one(email_doc).await;
+            incrementar_contador(database, status).await;
+            return;
+        }
+    };
+
+    let orcamento_oid = match orcamento.id {
+        Some(oid) => oid,
+        None => return,
+    };
+    let orcamento_desc = orcamento.descricao.clone();
+
+    let conteudo = format!("Assunto: {}\n\n{}", subject, body);
+    let update_result = database
+        .orcamentos
+        .update_one(
+            mongodb::bson::doc! { "_id": orcamento_oid },
+            mongodb::bson::doc! {
+                "$set": {
+                    "divergencia_email_status": "correcao_recebida",
+                    "divergencia_email_correcao": &conteudo,
+                }
+            },
+        )
+        .await;
+
+    let (email_status, erro_msg) = match update_result {
+        Ok(_) => {
+            println!("[EmailWatcher] ✅ Correção de divergência registrada para: {}", orcamento_desc);
+            ("aplicado".to_string(), None)
+        }
+        Err(e) => ("erro".to_string(), Some(format!("Erro ao atualizar orçamento: {}", e))),
+    };
+
+    let email_doc = db::models::EmailProcessado {
+        id: None,
+        gmail_message_id: msg_id.to_string(),
+        tipo: "correcao_divergencia".to_string(),
+        transportadora_id,
+        transportadora_nome: String::new(),
+        orcamento_id: Some(orcamento_oid),
+        orcamento_descricao: Some(orcamento_desc),
+        processado_em: now_iso.to_string(),
+        status: email_status,
+        valor_extraido: None,
+        erro: erro_msg,
+        assunto: Some(subject.to_string()),
+        remetente: Some(from.to_string()),
+        prazo_extraido: None,
+    };
+    let _ = database.emails_processados.insert_one(email_doc).await;
+    incrementar_contador(database, status).await;
 }
 
 // ── Processamento de Cotação ─────────────────────────────────

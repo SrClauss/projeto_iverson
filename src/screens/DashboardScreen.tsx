@@ -181,6 +181,7 @@ const DashboardScreen = (props: DashboardScreenProps) => {
               },
             }}
           >
+            <MenuItem value="numero_nota">Número de Nota</MenuItem>
             <MenuItem value="descricao">Descrição</MenuItem>
             <MenuItem value="cep_destino">CEP de destino</MenuItem>
             <MenuItem value="valor_produto">Faixa valor do produto</MenuItem>
@@ -189,11 +190,11 @@ const DashboardScreen = (props: DashboardScreenProps) => {
             <MenuItem value="transportadora">Transportadora</MenuItem>
           </TextField>
 
-          {filterType === 'descricao' && (
+          {(filterType === 'descricao' || filterType === 'numero_nota') && (
             <TextField
-              label="Descrição exata"
+              label={filterType === 'numero_nota' ? 'Número de Nota' : 'Descrição exata'}
               variant="outlined"
-              placeholder="Ex.: Pedido 123"
+              placeholder={filterType === 'numero_nota' ? 'Ex.: 123456' : 'Ex.: Pedido 123'}
               value={descricao}
               onChange={(event) => setDescricao(event.target.value)}
               sx={{ flex: 1, minWidth: 200, '& .MuiOutlinedInput-root': { borderRadius: 0, '& .MuiInputAdornment-positionStart': { marginRight: 0 }, '& .MuiOutlinedInput-input': { boxShadow: 'none' } } }}

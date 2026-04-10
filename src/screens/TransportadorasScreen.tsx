@@ -12,8 +12,11 @@ import {
   TableContainer,
   TableHead,
   TableRow,
+  FormControlLabel,
+  Checkbox,
+  Tooltip,
 } from '@mui/material';
-import { Add } from '@mui/icons-material';
+import { Add, ContentCopy } from '@mui/icons-material';
 import { glassPanel, tableHeaderRowSx, tableHeaderCellSx } from '../styles/glass';
 import { onlyDigits, formatCNPJ } from '../utils/formatters';
 import type { Transportadora, NovaTransportadoraForm } from '../types';
@@ -46,6 +49,23 @@ const TransportadorasScreen = (props: TransportadorasScreenProps) => {
     handleEditarTransportadora,
     handleDeletarTransportadora,
   } = props;
+
+  const [mesmoEmail, setMesmoEmail] = React.useState(false);
+
+  // Auto-reset the checkbox when the form is cleared after save
+  React.useEffect(() => {
+    if (!novaTransportadora.email_orcamento && !novaTransportadora.email_nota) {
+      setMesmoEmail(false);
+    }
+  }, [novaTransportadora.email_orcamento, novaTransportadora.email_nota]);
+
+  // When "mesmoEmail" is toggled on, mirror the orcamento email into nota
+  const handleMesmoEmailChange = (checked: boolean) => {
+    setMesmoEmail(checked);
+    if (checked) {
+      setNovaTransportadora((prev) => ({ ...prev, email_nota: prev.email_orcamento }));
+    }
+  };
 
   return (
     <Box
@@ -96,18 +116,56 @@ const TransportadorasScreen = (props: TransportadorasScreenProps) => {
           <TextField
             label="Email para orçamento"
             value={novaTransportadora.email_orcamento}
-            onChange={(event) =>
-              setNovaTransportadora((prev) => ({ ...prev, email_orcamento: event.target.value }))
-            }
+            onChange={(event) => {
+              const val = event.target.value;
+              setNovaTransportadora((prev) => ({
+                ...prev,
+                email_orcamento: val,
+                ...(mesmoEmail ? { email_nota: val } : {}),
+              }));
+            }}
             sx={{ '& .MuiOutlinedInput-root': { borderRadius: 0 } }}
             fullWidth
           />
+          <Stack direction="row" alignItems="center" spacing={1}>
+            <FormControlLabel
+              control={
+                <Checkbox
+                  size="small"
+                  checked={mesmoEmail}
+                  onChange={(e) => handleMesmoEmailChange(e.target.checked)}
+                />
+              }
+              label={
+                <Typography variant="caption" sx={{ color: '#64748b' }}>
+                  Usar mesmo email para nota
+                </Typography>
+              }
+              sx={{ m: 0 }}
+            />
+            {!mesmoEmail && novaTransportadora.email_orcamento && (
+              <Tooltip title="Copiar email de orçamento para nota" arrow>
+                <Button
+                  size="small"
+                  variant="text"
+                  startIcon={<ContentCopy fontSize="small" />}
+                  onClick={() =>
+                    setNovaTransportadora((prev) => ({ ...prev, email_nota: prev.email_orcamento }))
+                  }
+                  sx={{ textTransform: 'none', fontSize: '0.75rem', color: '#6366f1' }}
+                >
+                  Copiar
+                </Button>
+              </Tooltip>
+            )}
+          </Stack>
           <TextField
             label="Email para nota"
             value={novaTransportadora.email_nota}
             onChange={(event) =>
               setNovaTransportadora((prev) => ({ ...prev, email_nota: event.target.value }))
             }
+            disabled={mesmoEmail}
             sx={{ '& .MuiOutlinedInput-root': { borderRadius: 0 } }}
             fullWidth
           />
@@ -132,6 +190,7 @@ const TransportadorasScreen = (props: TransportadorasScreenProps) => {
                 onClick={() => {
                   setEditandoTransportadora(false);
                   setTransportadoraEmEdicao(null);
+                  setMesmoEmail(false);
                   setNovaTransportadora({
                     nome: '',
                     cnpj: '',

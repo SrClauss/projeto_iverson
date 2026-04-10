@@ -1,5 +1,5 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use base64::{engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD}, Engine as _};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -160,6 +160,8 @@ struct PropostaDetalheItem {
 struct OrcamentoDetalheItem {
     id: String,
     descricao: String,
+    numero_nota: Option<String>,
+    numero_cotacao: Option<String>,
     data_criacao: String,
     ativo: bool,
     cnpj_pagador: Option<String>,
@@ -177,6 +179,10 @@ struct OrcamentoDetalheItem {
     proposta_ganhadora_id: Option<String>,
     propostas: Vec<PropostaDetalheItem>,
     divergencia_tratada: bool,
+    divergencia_email_status: String,
+    divergencia_campos: Vec<String>,
+    divergencia_email_correcao: Option<String>,
+    divergencia_email_enviado_em: Option<String>,
 }
 
 fn status_orcamento(orcamento: &db::models::Orcamento) -> String {
@@ -292,6 +298,8 @@ async fn map_orcamento_to_detalhe(
     Ok(OrcamentoDetalheItem {
         id,
         descricao: orcamento.descricao,
+        numero_nota: orcamento.numero_nota,
+        numero_cotacao: orcamento.numero_cotacao,
         data_criacao: orcamento.data_criacao,
         ativo: orcamento.ativo,
         cnpj_pagador: orcamento.cnpj_pagador,
@@ -309,6 +317,10 @@ async fn map_orcamento_to_detalhe(
         propostas,
         transportadoras_enviadas: orcamento.transportadoras_enviadas,
         divergencia_tratada: orcamento.divergencia_tratada,
+        divergencia_email_status: orcamento.divergencia_email_status,
+        divergencia_campos: orcamento.divergencia_campos,
+        divergencia_email_correcao: orcamento.divergencia_email_correcao,
+        divergencia_email_enviado_em: orcamento.divergencia_email_enviado_em,
     })
 }
 
@@ -1190,9 +1202,9 @@ async fn excluir_notificacao(notificacao_id: String) -> Result<(), String> {
 #[tauri::command]
 fn set_tray_divergencias(app: tauri::AppHandle, count: u32) -> Result<String, String> {
     let tooltip = match count {
-        0 => "iverson-app".to_string(),
-        1 => "iverson-app - 1 nova notificação".to_string(),
-        n => format!("iverson-app - {} novas notificações", n),
+        0 => "Ultimax - Monitor de Fretes".to_string(),
+        1 => "Ultimax - Monitor de Fretes - 1 nova notificação".to_string(),
+        n => format!("Ultimax - Monitor de Fretes - {} novas notificações", n),
     };
 
     // Em Tauri 2, iteramos sobre os tray icons disponíveis
@@ -1209,6 +1221,15 @@ async fn add_orcamento(mut orcamento: db::models::Orcamento) -> Result<String, S
     orcamento.id = None;
     orcamento.ativo = true;
     orcamento.proposta_ganhadora_id = None;
+
+    // Derive descricao from numero_nota and numero_cotacao if provided
+    let nn = orcamento.numero_nota.as_deref().unwrap_or("").trim().to_string();
+    let nc = orcamento.numero_cotacao.as_deref().unwrap_or("").trim().to_string();
+    if !nn.is_empty() || !nc.is_empty() {
+        orcamento.descricao = format!("NF:{} / COT:{}", nn, nc);
+    } else if orcamento.descricao.trim().is_empty() {
+        return Err("Informe pelo menos o Número de Nota ou Número de Cotação.".to_string());
+    }
 
     let insert_result = database
         .orcamentos
@@ -1354,7 +1375,9 @@ async fn get_orcamento_detalhe(orcamento_id: String) -> Result<OrcamentoDetalheI
 #[tauri::command]
 async fn update_orcamento_basico(
     orcamento_id: String,
-    descricao: String,
+    descricao: Option<String>,
+    numero_nota: Option<String>,
+    numero_cotacao: Option<String>,
     data_criacao: String,
     cnpj_pagador: Option<String>,
     cnpj_cpf_destino: Option<String>,
@@ -1372,15 +1395,28 @@ async fn update_orcamento_basico(
     let orcamento_oid = mongodb::bson::oid::ObjectId::parse_str(&orcamento_id)
         .map_err(|e| format!("ID de orçamento inválido: {}", e))?;
 
-    let descricao = descricao.trim();
     let data_criacao = data_criacao.trim();
+    if data_criacao.is_empty() {
+        return Err("Data de criação é obrigatória".to_string());
+    }
 
-    if descricao.is_empty() || data_criacao.is_empty() {
-        return Err("Descrição e data de criação são obrigatórias".to_string());
+    // Derive descricao from numero_nota/numero_cotacao if provided
+    let nn = numero_nota.as_deref().unwrap_or("").trim().to_string();
+    let nc = numero_cotacao.as_deref().unwrap_or("").trim().to_string();
+    let descricao_final = if !nn.is_empty() || !nc.is_empty() {
+        format!("NF:{} / COT:{}", nn, nc)
+    } else {
+        descricao.as_deref().unwrap_or("").trim().to_string()
+    };
+
+    if descricao_final.is_empty() {
+        return Err("Informe pelo menos o Número de Nota ou Número de Cotação.".to_string());
     }
 
     let mut set_doc = mongodb::bson::Document::new();
-    set_doc.insert("descricao", descricao);
+    set_doc.insert("descricao", descricao_final.as_str());
+    set_doc.insert("numero_nota", numero_nota.as_deref());
+    set_doc.insert("numero_cotacao", numero_cotacao.as_deref());
     set_doc.insert("data_criacao", data_criacao);
     set_doc.insert("cnpj_pagador", cnpj_pagador);
     set_doc.insert("cnpj_cpf_destino", cnpj_cpf_destino);
@@ -1960,6 +1996,38 @@ async fn filter_orcamentos_by(filter: String, value: String) -> Result<Vec<Orcam
     };
 
     match filter.as_str(){
+         "numero_nota" => {
+            let mut cursor = database
+                .orcamentos
+                .find(mongodb::bson::doc! { "numero_nota": &value })
+                .await
+                .map_err(|e| format!("Erro ao buscar orçamentos: {}", e))?;
+
+            let mut itens: Vec<OrcamentoRecenteItem> = Vec::new();
+
+            while cursor
+                .advance()
+                .await
+                .map_err(|e| format!("Erro ao coletar orçamentos: {}", e))?
+            {
+                let orcamento = cursor
+                    .deserialize_current()
+                    .map_err(|e| format!("Erro ao desserializar orçamento: {}", e))?;
+                let id = orcamento.id.as_ref().map(|oid| oid.to_hex()).unwrap_or_default();
+                let status = status_orcamento(&orcamento);
+                itens.push(OrcamentoRecenteItem {
+                    id,
+                    pedido: orcamento.descricao.clone(),
+                    status,
+                    propostas: orcamento.propostas.len() as u32,
+                    data: orcamento.data_criacao.clone(),
+                    transportadoras_preview: transportadoras_preview_for_orcamento(&orcamento, &transportadora_nome_por_id),
+                });
+            }
+
+            Ok(itens)
+         },
+
          "descricao" => {
             let mut cursor = database
                 .orcamentos
@@ -2524,6 +2592,320 @@ async fn excluir_email(email_id: String) -> Result<String, String> {
     Ok("Email excluído".to_string())
 }
 
+/// Extracts NF number from a 44-digit chave (positions 25-34, 0-indexed)
+fn extrair_numero_nf_da_chave(chave: &str) -> String {
+    let digits: String = chave.chars().filter(|c| c.is_ascii_digit()).collect();
+    if digits.len() >= 34 {
+        digits[25..34].trim_start_matches('0').to_string()
+    } else {
+        String::new()
+    }
+}
+
+/// Compares a CT-e XML against an orcamento, returning field-by-field comparison.
+#[tauri::command]
+async fn comparar_cte_xml(orcamento_id: String, xml_base64: String) -> Result<serde_json::Value, String> {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+
+    let xml_bytes = STANDARD.decode(&xml_base64)
+        .map_err(|e| format!("Erro ao decodificar XML base64: {}", e))?;
+
+    let cte = cte_parser::parse_cte_xml(&xml_bytes)?;
+
+    let database = db::get_database().await?;
+    let orcamento_oid = mongodb::bson::oid::ObjectId::parse_str(&orcamento_id)
+        .map_err(|e| format!("ID de orçamento inválido: {}", e))?;
+
+    let orcamento = database
+        .orcamentos
+        .find_one(mongodb::bson::doc! { "_id": orcamento_oid })
+        .await
+        .map_err(|e| format!("Erro ao buscar orçamento: {}", e))?
+        .ok_or_else(|| "Orçamento não encontrado".to_string())?;
+
+    let proposta_ganhadora = orcamento.proposta_ganhadora_id.as_deref()
+        .and_then(|gid| orcamento.propostas.iter().find(|p| p.id.as_deref() == Some(gid)));
+
+    let mut campos: Vec<serde_json::Value> = Vec::new();
+    let mut tem_divergencia = false;
+
+    // CNPJ do Remetente
+    let cnpj_orc = orcamento.cnpj_pagador.as_deref().unwrap_or("").replace(['.', '/', '-'], "");
+    let cnpj_xml = cte.cnpj_remetente.replace(['.', '/', '-'], "");
+    let div = !cnpj_orc.is_empty() && !cnpj_xml.is_empty() && cnpj_orc != cnpj_xml;
+    if div { tem_divergencia = true; }
+    campos.push(serde_json::json!({
+        "campo": "CNPJ do Remetente",
+        "valor_orcamento": orcamento.cnpj_pagador.as_deref().unwrap_or("-"),
+        "valor_xml": &cte.cnpj_remetente,
+        "divergente": div
+    }));
+
+    // CEP destino
+    let cep_orc = orcamento.cep_destino.as_deref().unwrap_or("").replace('-', "");
+    let cep_xml = cte.cep_destino.replace('-', "");
+    let div = !cep_orc.is_empty() && !cep_xml.is_empty() && cep_orc != cep_xml;
+    if div { tem_divergencia = true; }
+    campos.push(serde_json::json!({
+        "campo": "CEP Destino",
+        "valor_orcamento": orcamento.cep_destino.as_deref().unwrap_or("-"),
+        "valor_xml": &cte.cep_destino,
+        "divergente": div
+    }));
+
+    // Cidade destino
+    let cidade_orc = orcamento.endereco_destino.as_deref().unwrap_or("").to_lowercase();
+    let cidade_xml_lower = cte.cidade_destino.to_lowercase();
+    let div = !cidade_xml_lower.is_empty() && !cidade_orc.is_empty()
+        && !cidade_orc.contains(&cidade_xml_lower);
+    if div { tem_divergencia = true; }
+    campos.push(serde_json::json!({
+        "campo": "Cidade Destino",
+        "valor_orcamento": orcamento.endereco_destino.as_deref().unwrap_or("-"),
+        "valor_xml": &cte.cidade_destino,
+        "divergente": div
+    }));
+
+    // UF destino (informativo, no divergence check needed)
+    campos.push(serde_json::json!({
+        "campo": "UF Destino (XML)",
+        "valor_orcamento": "-",
+        "valor_xml": &cte.uf_destino,
+        "divergente": false
+    }));
+
+    // Rua destino (informativo)
+    campos.push(serde_json::json!({
+        "campo": "Rua Destino (XML)",
+        "valor_orcamento": orcamento.endereco_destino.as_deref().unwrap_or("-"),
+        "valor_xml": &cte.xlgr_destino,
+        "divergente": false
+    }));
+
+    // Número destino (informativo)
+    campos.push(serde_json::json!({
+        "campo": "Número Destino (XML)",
+        "valor_orcamento": "-",
+        "valor_xml": &cte.nro_destino,
+        "divergente": false
+    }));
+
+    // Peso
+    let peso_orc = orcamento.peso.unwrap_or(0.0);
+    let div = peso_orc > 0.0 && cte.peso_real > 0.0 && (peso_orc - cte.peso_real).abs() > 0.5;
+    if div { tem_divergencia = true; }
+    campos.push(serde_json::json!({
+        "campo": "Peso (kg)",
+        "valor_orcamento": if peso_orc > 0.0 { format!("{:.3}", peso_orc) } else { "-".to_string() },
+        "valor_xml": if cte.peso_real > 0.0 { format!("{:.3}", cte.peso_real) } else { "-".to_string() },
+        "divergente": div
+    }));
+
+    // Volume m³
+    campos.push(serde_json::json!({
+        "campo": "Volume m³ (XML)",
+        "valor_orcamento": "-",
+        "valor_xml": if cte.volume_m3 > 0.0 { format!("{:.4}", cte.volume_m3) } else { "-".to_string() },
+        "divergente": false
+    }));
+
+    // Qtd Volumes
+    let qtd_orc = orcamento.qtd_volumes.unwrap_or(0);
+    let div = qtd_orc > 0 && cte.qtd_volumes > 0 && qtd_orc != cte.qtd_volumes;
+    if div { tem_divergencia = true; }
+    campos.push(serde_json::json!({
+        "campo": "Qtd. Volumes",
+        "valor_orcamento": if qtd_orc > 0 { qtd_orc.to_string() } else { "-".to_string() },
+        "valor_xml": if cte.qtd_volumes > 0 { cte.qtd_volumes.to_string() } else { "-".to_string() },
+        "divergente": div
+    }));
+
+    // Número de Nota vs chave NF-e
+    let nota_orc = orcamento.numero_nota.as_deref()
+        .or(orcamento.nota.as_deref())
+        .unwrap_or("").trim().to_string();
+    let nf_numero_xml = extrair_numero_nf_da_chave(&cte.chave_nfe);
+    let div = !nota_orc.is_empty() && !nf_numero_xml.is_empty() && {
+        let nota_stripped: String = nota_orc.chars().filter(|c| c.is_ascii_digit()).collect();
+        nota_stripped.trim_start_matches('0') != nf_numero_xml.trim_start_matches('0')
+    };
+    if div { tem_divergencia = true; }
+    campos.push(serde_json::json!({
+        "campo": "Número de Nota",
+        "valor_orcamento": if nota_orc.is_empty() { "-".to_string() } else { nota_orc },
+        "valor_xml": if nf_numero_xml.is_empty() { cte.chave_nfe.clone() } else { nf_numero_xml },
+        "divergente": div
+    }));
+
+    // Valor orçado (proposta ganhadora) vs valor frete XML
+    if let Some(ganhadora) = proposta_ganhadora {
+        let valor_orc = ganhadora.valor_proposta;
+        let valor_xml = cte.valor_frete_original;
+        let div = (valor_orc - valor_xml).abs() > 0.01;
+        if div { tem_divergencia = true; }
+        campos.push(serde_json::json!({
+            "campo": "Valor Orçado vs Frete XML",
+            "valor_orcamento": format!("R$ {:.2}", valor_orc),
+            "valor_xml": format!("R$ {:.2}", valor_xml),
+            "divergente": div
+        }));
+    }
+
+    // Valor da nota (valor_produto) vs valor carga XML
+    let valor_nota_orc = orcamento.valor_produto.unwrap_or(0.0);
+    let div = valor_nota_orc > 0.0 && cte.valor_carga > 0.0
+        && (valor_nota_orc - cte.valor_carga).abs() > 0.01;
+    if div { tem_divergencia = true; }
+    campos.push(serde_json::json!({
+        "campo": "Valor da Nota (mercadoria)",
+        "valor_orcamento": if valor_nota_orc > 0.0 { format!("R$ {:.2}", valor_nota_orc) } else { "-".to_string() },
+        "valor_xml": if cte.valor_carga > 0.0 { format!("R$ {:.2}", cte.valor_carga) } else { "-".to_string() },
+        "divergente": div
+    }));
+
+    Ok(serde_json::json!({
+        "orcamento_id": orcamento_id,
+        "campos": campos,
+        "tem_divergencia": tem_divergencia
+    }))
+}
+
+/// Sends a divergence notification email to the winning transportadora.
+#[tauri::command]
+async fn enviar_email_divergencia(
+    orcamento_id: String,
+    campos_divergentes: Vec<String>,
+) -> Result<String, String> {
+    let database = db::get_database().await?;
+    let orcamento_oid = mongodb::bson::oid::ObjectId::parse_str(&orcamento_id)
+        .map_err(|e| format!("ID de orçamento inválido: {}", e))?;
+
+    let orcamento = database
+        .orcamentos
+        .find_one(mongodb::bson::doc! { "_id": orcamento_oid })
+        .await
+        .map_err(|e| format!("Erro ao buscar orçamento: {}", e))?
+        .ok_or_else(|| "Orçamento não encontrado".to_string())?;
+
+    let proposta_ganhadora = orcamento.proposta_ganhadora_id.as_deref()
+        .and_then(|gid| orcamento.propostas.iter().find(|p| p.id.as_deref() == Some(gid)));
+
+    let transportadora_oid = proposta_ganhadora
+        .and_then(|p| p.transportadora_id)
+        .ok_or_else(|| "Proposta ganhadora ou transportadora não encontrada".to_string())?;
+
+    let transportadora = database
+        .transportadoras
+        .find_one(mongodb::bson::doc! { "_id": transportadora_oid })
+        .await
+        .map_err(|e| format!("Erro ao buscar transportadora: {}", e))?
+        .ok_or_else(|| "Transportadora não encontrada".to_string())?;
+
+    let email_to = transportadora.email_nota.trim();
+    if email_to.is_empty() {
+        return Err("Transportadora não possui email de nota cadastrado".to_string());
+    }
+
+    let numero_nota = orcamento.numero_nota.as_deref()
+        .or(orcamento.nota.as_deref()).unwrap_or("");
+    let numero_cotacao = orcamento.numero_cotacao.as_deref().unwrap_or("");
+    let campos_str = campos_divergentes.iter()
+        .map(|c| format!("  - {}", c))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let subject = format!("Divergência detectada - NF:{} COT:{}", numero_nota, numero_cotacao);
+    let body = format!(
+        "Prezada {},\n\nIdentificamos divergências no frete referente ao orçamento {}.\n\nCampos com divergência:\n{}\n\nSolicito correção ou esclarecimento dos campos acima.\nPor favor, responda este e-mail com as devidas correções.\n\nAtenciosamente,\nEquipe Ultimax - Monitor de Fretes",
+        transportadora.nome, orcamento.descricao, campos_str,
+    );
+
+    let gmail = gmail_client::GmailClient::authenticate().await?;
+    gmail.send_email(email_to, &subject, &body).await?;
+
+    let now_iso = chrono::Utc::now().to_rfc3339();
+    let campos_bson: Vec<mongodb::bson::Bson> = campos_divergentes.iter()
+        .map(|c| mongodb::bson::Bson::String(c.clone()))
+        .collect();
+
+    database
+        .orcamentos
+        .update_one(
+            mongodb::bson::doc! { "_id": orcamento_oid },
+            mongodb::bson::doc! {
+                "$set": {
+                    "divergencia_email_status": "email_enviado",
+                    "divergencia_campos": campos_bson,
+                    "divergencia_email_enviado_em": &now_iso,
+                    "divergencia_tratada": false,
+                }
+            },
+        )
+        .await
+        .map_err(|e| format!("Erro ao atualizar orçamento: {}", e))?;
+
+    Ok(format!("Email de divergência enviado para {}", email_to))
+}
+
+/// Marks a divergence as finalized (divergencia_tratada = true).
+#[tauri::command]
+async fn finalizar_divergencia(orcamento_id: String) -> Result<String, String> {
+    let database = db::get_database().await?;
+    let orcamento_oid = mongodb::bson::oid::ObjectId::parse_str(&orcamento_id)
+        .map_err(|e| format!("ID de orçamento inválido: {}", e))?;
+
+    let result = database
+        .orcamentos
+        .update_one(
+            mongodb::bson::doc! { "_id": orcamento_oid },
+            mongodb::bson::doc! {
+                "$set": {
+                    "divergencia_tratada": true,
+                    "divergencia_email_status": "finalizada",
+                }
+            },
+        )
+        .await
+        .map_err(|e| format!("Erro ao finalizar divergência: {}", e))?;
+
+    if result.matched_count == 0 {
+        return Err("Orçamento não encontrado".to_string());
+    }
+    Ok("Divergência finalizada".to_string())
+}
+
+/// Reverts a divergence back to pending state.
+#[tauri::command]
+async fn reverter_divergencia(orcamento_id: String) -> Result<String, String> {
+    let database = db::get_database().await?;
+    let orcamento_oid = mongodb::bson::oid::ObjectId::parse_str(&orcamento_id)
+        .map_err(|e| format!("ID de orçamento inválido: {}", e))?;
+
+    let result = database
+        .orcamentos
+        .update_one(
+            mongodb::bson::doc! { "_id": orcamento_oid },
+            mongodb::bson::doc! {
+                "$set": {
+                    "divergencia_tratada": false,
+                    "divergencia_email_status": "pendente",
+                },
+                "$unset": {
+                    "divergencia_email_correcao": "",
+                    "divergencia_email_enviado_em": "",
+                    "divergencia_campos": "",
+                }
+            },
+        )
+        .await
+        .map_err(|e| format!("Erro ao reverter divergência: {}", e))?;
+
+    if result.matched_count == 0 {
+        return Err("Orçamento não encontrado".to_string());
+    }
+    Ok("Divergência revertida para pendente".to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Carrega explicitamente do src-tauri/.env independente do cwd
@@ -2574,7 +2956,11 @@ pub fn run() {
             sync_notificacoes_divergencias,
             marcar_divergencia_tratada,
             migrar_divergencia_tratada,
-            send_orcamento_request_email
+            send_orcamento_request_email,
+            comparar_cte_xml,
+            enviar_email_divergencia,
+            finalizar_divergencia,
+            reverter_divergencia
         ])
         .setup(|app| {
             // Watcher state management
@@ -2587,7 +2973,7 @@ pub fn run() {
             let _tray = TrayIconBuilder::with_id("main")
                 .icon(app.default_window_icon().unwrap().clone())
                 .menu(&menu)
-                .tooltip("iverson-app")
+                .tooltip("Ultimax - Monitor de Fretes")
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show" => {
                         if let Some(win) = app.get_webview_window("main") {
