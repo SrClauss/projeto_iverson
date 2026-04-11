@@ -9,7 +9,7 @@ const CALLBACK_PORT: u16 = 8847;
 const REDIRECT_URI: &str = "http://localhost:8847/callback";
 
 /// Escopos necessários para acessar o Gmail
-const GMAIL_SCOPES: &str = "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/userinfo.email";
+const GMAIL_SCOPES: &str = "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/userinfo.email";
 
 // ── Global auth state ─────────────────────────────────────────
 

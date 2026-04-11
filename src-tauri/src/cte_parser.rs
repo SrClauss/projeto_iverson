@@ -39,6 +39,8 @@ pub struct CteInfo {
     pub nro_destino: String,
     /// Peso real (kg)
     pub peso_real: f64,
+    /// Peso base de cálculo (kg), quando declarado no XML
+    pub peso_base_calculo: Option<f64>,
     /// Volume total (m³)
     pub volume_m3: f64,
     /// Quantidade de volumes (unidades)
@@ -76,6 +78,7 @@ pub fn parse_cte_xml(xml_bytes: &[u8]) -> Result<CteInfo, String> {
     let mut xlgr_destino: Option<String> = None;
     let mut nro_destino: Option<String> = None;
     let mut peso_real: Option<f64> = None;
+    let mut peso_base_calculo: Option<f64> = None;
     let mut volume_m3: Option<f64> = None;
     let mut qtd_volumes: Option<u32> = None;
     let mut valor_carga: Option<f64> = None;
@@ -220,6 +223,9 @@ pub fn parse_cte_xml(xml_bytes: &[u8]) -> Result<CteInfo, String> {
                                 Some("PESO REAL") => {
                                     if peso_real.is_none() { peso_real = Some(q); }
                                 }
+                                Some("PESO BASE DE CALCULO") => {
+                                    if peso_base_calculo.is_none() { peso_base_calculo = Some(q); }
+                                }
                                 Some("M3") => {
                                     if volume_m3.is_none() { volume_m3 = Some(q); }
                                 }
@@ -255,6 +261,8 @@ pub fn parse_cte_xml(xml_bytes: &[u8]) -> Result<CteInfo, String> {
     let valor_centavos = parse_valor_centavos(&valor_str)
         .ok_or_else(|| format!("Não foi possível converter valor: {}", valor_str))?;
 
+    let resolved_peso_real = peso_real.or(peso_base_calculo).unwrap_or(0.0);
+
     Ok(CteInfo {
         valor_frete_centavos: valor_centavos,
         valor_frete_original: valor_f64,
@@ -272,7 +280,8 @@ pub fn parse_cte_xml(xml_bytes: &[u8]) -> Result<CteInfo, String> {
         uf_destino: uf_destino.unwrap_or_default(),
         xlgr_destino: xlgr_destino.unwrap_or_default(),
         nro_destino: nro_destino.unwrap_or_default(),
-        peso_real: peso_real.unwrap_or(0.0),
+        peso_real: resolved_peso_real,
+        peso_base_calculo,
         volume_m3: volume_m3.unwrap_or(0.0),
         qtd_volumes: qtd_volumes.unwrap_or(0),
         valor_carga: valor_carga.unwrap_or(0.0),
@@ -303,6 +312,37 @@ mod tests {
         assert_eq!(parse_valor_centavos("0.50"), Some(50));
         assert_eq!(parse_valor_centavos("1000.00"), Some(100000));
         assert_eq!(parse_valor_centavos("157,72"), Some(15772));
+    }
+
+    #[test]
+    fn test_parse_cte_xml_peso_base_calculo_fallback() {
+        let xml = r#"<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<cteProc xmlns=\"http://www.portalfiscal.inf.br/cte\" versao=\"4.00\"> 
+  <CTe>
+    <infCte Id=\"CTe123\" versao=\"4.00\"> 
+      <ide><cUF>41</cUF></ide>
+      <emit><CNPJ>00000000000000</CNPJ><xNome>Emitente</xNome></emit>
+      <rem><CNPJ>11111111111111</CNPJ><xNome>Remetente</xNome></rem>
+      <infCTeNorm>
+        <infCarga>
+          <vCarga>100.00</vCarga>
+          <proPred>Produto</proPred>
+          <infQ>
+            <tpMed>PESO BASE DE CALCULO</tpMed>
+            <qCarga>12.34</qCarga>
+          </infQ>
+        </infCarga>
+        <infDoc><infNFe><chave>12345678901234567890123456789012345678901234</chave></infNFe></infDoc>
+      </infCTeNorm>
+      <vPrest><vTPrest>200.00</vTPrest><vRec>200.00</vRec></vPrest>
+      <infRespTec><CNPJ>00000000000000</CNPJ><xContato>Contato</xContato><email>e@e.com</email><fone>000</fone></infRespTec>
+    </infCte>
+  </CTe>
+</cteProc>"#;
+
+        let info = parse_cte_xml(xml.as_bytes()).unwrap();
+        assert_eq!(info.peso_real, 12.34);
+        assert_eq!(info.peso_base_calculo, Some(12.34));
     }
 }
 

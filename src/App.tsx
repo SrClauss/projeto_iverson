@@ -99,6 +99,11 @@ const App = () => {
     cnpj_pagador: '',
     cnpj_cpf_destino: '',
     cep_destino: '',
+    logradouro_destino: '',
+    numero_destino: '',
+    bairro_destino: '',
+    cidade_destino: '',
+    uf_destino: '',
     endereco_destino: '',
     nota: '',
     valor_produto: '',
@@ -106,6 +111,25 @@ const App = () => {
     dimensoes: { comprimento: '', largura: '', altura: '' },
     peso: '',
   });
+
+  const buildEnderecoDestino = (orc: NovoOrcamentoForm) => {
+    const parts: string[] = [];
+    if (orc.logradouro_destino.trim()) {
+      parts.push(orc.logradouro_destino.trim());
+    }
+    if (orc.bairro_destino.trim()) {
+      parts.push(orc.bairro_destino.trim());
+    }
+    const cidadeUf = [orc.cidade_destino.trim(), orc.uf_destino.trim()].filter(Boolean).join(' - ');
+    if (cidadeUf) {
+      parts.push(cidadeUf);
+    }
+    if (orc.numero_destino.trim()) {
+      parts.push(`nº ${orc.numero_destino.trim()}`);
+    }
+    return parts.join(', ');
+  };
+
   const [orcamentoSelecionadoId, setOrcamentoSelecionadoId] = useState<string | null>(null);
   const [orcamentoDetalhe, setOrcamentoDetalhe] = useState<OrcamentoDetalhe | null>(null);
   const [novaProposta, setNovaProposta] = useState<NovaPropostaForm>({
@@ -190,8 +214,19 @@ const App = () => {
         if (!resp.ok) throw new Error('Falha ao buscar CEP');
         const data = await resp.json();
         if (data.erro) { setCepError('CEP não encontrado.'); return; }
-        const enderecoFormatado = [data.logradouro, data.bairro, data.localidade, data.uf].filter(Boolean).join(', ');
-        setNovoOrcamento((prev) => ({ ...prev, endereco_destino: enderecoFormatado || prev.endereco_destino }));
+        setNovoOrcamento((prev) => {
+          const next = {
+            ...prev,
+            logradouro_destino: data.logradouro || prev.logradouro_destino,
+            bairro_destino: data.bairro || prev.bairro_destino,
+            cidade_destino: data.localidade || prev.cidade_destino,
+            uf_destino: data.uf || prev.uf_destino,
+          };
+          return {
+            ...next,
+            endereco_destino: buildEnderecoDestino(next) || prev.endereco_destino,
+          };
+        });
         setCepError(null);
       } catch { setCepError('Não foi possível consultar o CEP.'); }
     }, 500);
@@ -387,6 +422,11 @@ const App = () => {
         cnpj_pagador: detalhe.cnpj_pagador || '',
         cnpj_cpf_destino: detalhe.cnpj_cpf_destino || '',
         cep_destino: detalhe.cep_destino || '',
+        logradouro_destino: detalhe.logradouro_destino || '',
+        numero_destino: detalhe.numero_destino || '',
+        bairro_destino: detalhe.bairro_destino || '',
+        cidade_destino: detalhe.cidade_destino || '',
+        uf_destino: detalhe.uf_destino || '',
         endereco_destino: detalhe.endereco_destino || '',
         nota: detalhe.nota || '',
         valor_produto: detalhe.valor_produto !== undefined && detalhe.valor_produto !== null ? String(detalhe.valor_produto) : '',
@@ -428,6 +468,11 @@ const App = () => {
       cnpj_pagador: '',
       cnpj_cpf_destino: '',
       cep_destino: '',
+      logradouro_destino: '',
+      numero_destino: '',
+      bairro_destino: '',
+      cidade_destino: '',
+      uf_destino: '',
       endereco_destino: '',
       nota: '',
       valor_produto: '',
@@ -623,6 +668,7 @@ const App = () => {
       : null;
     const cnpjPagador = novoOrcamento.cnpj_pagador?.trim() || null;
     const cnpjCpfDestino = novoOrcamento.cnpj_cpf_destino?.trim() || null;
+    const enderecoDestino = buildEnderecoDestino(novoOrcamento) || novoOrcamento.endereco_destino.trim();
     if (novoOrcamento.valor_produto && (valorProduto === null || Number.isNaN(valorProduto))) { setError('Valor do produto inválido.'); return; }
     if (novoOrcamento.peso && Number.isNaN(peso)) { setError('Peso inválido.'); return; }
     if (volumes.some((vol: any) => Number.isNaN(vol.comprimento) || Number.isNaN(vol.largura) || Number.isNaN(vol.altura))) { setError('Pelo menos um volume possui dimensão inválida.'); return; }
@@ -636,7 +682,13 @@ const App = () => {
           numero_nota: numeroNota || null,
           numero_cotacao: numeroCotacao || null,
           data_criacao: dataCriacaoNormalizada, cnpj_pagador: cnpjPagador, cnpj_cpf_destino: cnpjCpfDestino,
-          cep_destino: novoOrcamento.cep_destino.trim() || null, endereco_destino: novoOrcamento.endereco_destino.trim() || null,
+          cep_destino: novoOrcamento.cep_destino.trim() || null,
+          logradouro_destino: novoOrcamento.logradouro_destino.trim() || null,
+          numero_destino: novoOrcamento.numero_destino.trim() || null,
+          bairro_destino: novoOrcamento.bairro_destino.trim() || null,
+          cidade_destino: novoOrcamento.cidade_destino.trim() || null,
+          uf_destino: novoOrcamento.uf_destino.trim() || null,
+          endereco_destino: enderecoDestino || null,
           nota: novoOrcamento.nota.trim() || null, valor_produto: valorProduto,
           volumes: volumes.length > 0 ? volumes : null, dimensoes, peso: peso ?? pesoTotal,
           propostas: [], ativo: true, transportadora_id: null,
@@ -646,7 +698,13 @@ const App = () => {
       setNovoOrcamento({
         numero_nota: numeroNota, numero_cotacao: numeroCotacao, data_criacao: dataCriacaoNormalizada,
         cnpj_pagador: novoOrcamento.cnpj_pagador, cnpj_cpf_destino: novoOrcamento.cnpj_cpf_destino,
-        cep_destino: novoOrcamento.cep_destino, endereco_destino: novoOrcamento.endereco_destino,
+        cep_destino: novoOrcamento.cep_destino,
+        logradouro_destino: novoOrcamento.logradouro_destino,
+        numero_destino: novoOrcamento.numero_destino,
+        bairro_destino: novoOrcamento.bairro_destino,
+        cidade_destino: novoOrcamento.cidade_destino,
+        uf_destino: novoOrcamento.uf_destino,
+        endereco_destino: enderecoDestino,
         nota: novoOrcamento.nota, valor_produto: novoOrcamento.valor_produto,
         volumes: novoOrcamento.volumes, dimensoes: novoOrcamento.dimensoes,
         peso: novoOrcamento.peso || String(pesoTotal),
@@ -693,6 +751,7 @@ const App = () => {
       : null;
     if (novoOrcamento.valor_produto && (valorProduto === null || Number.isNaN(valorProduto))) { setError('Valor do produto inválido.'); return; }
     if (novoOrcamento.peso && Number.isNaN(peso)) { setError('Peso inválido.'); return; }
+    const enderecoDestino = buildEnderecoDestino(novoOrcamento) || novoOrcamento.endereco_destino.trim();
     setSavingEdicaoOrcamento(true);
     try {
       await invoke<string>('update_orcamento_basico', {
@@ -702,7 +761,13 @@ const App = () => {
         numeroCotacao: numeroCotacao || null,
         dataCriacao: dataCriacaoNormalizada,
         cnpj_pagador: novoOrcamento.cnpj_pagador.trim() || null, cnpj_cpf_destino: novoOrcamento.cnpj_cpf_destino.trim() || null,
-        cep_destino: novoOrcamento.cep_destino.trim() || null, endereco_destino: novoOrcamento.endereco_destino.trim() || null,
+        cep_destino: novoOrcamento.cep_destino.trim() || null,
+        logradouro_destino: novoOrcamento.logradouro_destino.trim() || null,
+        numero_destino: novoOrcamento.numero_destino.trim() || null,
+        bairro_destino: novoOrcamento.bairro_destino.trim() || null,
+        cidade_destino: novoOrcamento.cidade_destino.trim() || null,
+        uf_destino: novoOrcamento.uf_destino.trim() || null,
+        endereco_destino: enderecoDestino || null,
         nota: novoOrcamento.nota.trim() || null, valor_produto: valorProduto,
         volumes: volumes.length > 0 ? volumes : null, dimensoes, peso: peso ?? pesoTotal,
       });
@@ -876,7 +941,8 @@ const App = () => {
   const handleEnviarEmailDivergencia = async (orcamentoId: string, camposDivergentes: string[]) => {
     try {
       await invoke('enviar_email_divergencia', { orcamentoId, camposDivergentes });
-      await loadDashboard();
+      // showLoading=false: evita desmontar DivergenciasScreen (perderia comparacao/camposAceitos)
+      await loadDashboard(undefined, false);
     } catch (err) {
       setError(String(err));
       throw err;
@@ -886,7 +952,7 @@ const App = () => {
   const handleFinalizarDivergencia = async (orcamentoId: string) => {
     try {
       await invoke('finalizar_divergencia', { orcamentoId });
-      await loadDashboard();
+      await loadDashboard(undefined, false);
     } catch (err) {
       setError(String(err));
     }
@@ -895,7 +961,7 @@ const App = () => {
   const handleReverterDivergencia = async (orcamentoId: string) => {
     try {
       await invoke('reverter_divergencia', { orcamentoId });
-      await loadDashboard();
+      await loadDashboard(undefined, false);
     } catch (err) {
       setError(String(err));
     }

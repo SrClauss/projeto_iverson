@@ -186,6 +186,7 @@ struct OrcamentoDetalheItem {
     divergencia_tratada: bool,
     divergencia_email_status: String,
     divergencia_campos: Vec<String>,
+    divergencia_campos_aceitos: Vec<String>,
     divergencia_email_correcao: Option<String>,
     divergencia_email_enviado_em: Option<String>,
 }
@@ -329,6 +330,7 @@ async fn map_orcamento_to_detalhe(
         divergencia_tratada: orcamento.divergencia_tratada,
         divergencia_email_status: orcamento.divergencia_email_status,
         divergencia_campos: orcamento.divergencia_campos,
+        divergencia_campos_aceitos: orcamento.divergencia_campos_aceitos,
         divergencia_email_correcao: orcamento.divergencia_email_correcao,
         divergencia_email_enviado_em: orcamento.divergencia_email_enviado_em,
     })
@@ -865,6 +867,38 @@ async fn get_dashboard_alertas(limit: u32) -> Result<Vec<DashboardAlertaItem>, S
                     "Divergência: frete pago R$ {} vs proposta R$ {}",
                     valor_frete_pago, proposta.valor_proposta
                 ),
+                severity: "error".to_string(),
+            });
+
+            if alertas.len() >= limit {
+                return Ok(alertas);
+            }
+        }
+
+        // Alerta por divergência de peso (ou outros campos) detectada automaticamente
+        // Ativa quando divergencia_campos tem entradas mas não havia divergência de valor nas propostas
+        let ja_tem_alerta = alertas.iter().any(|a| a.orcamento_id == orcamento_id);
+        if !ja_tem_alerta && !orcamento.divergencia_campos.is_empty() {
+            let transportadora = orcamento
+                .propostas
+                .iter()
+                .find(|p| orcamento.proposta_ganhadora_id.as_deref() == p.id.as_deref())
+                .and_then(|p| p.transportadora_id.as_ref())
+                .and_then(|id| transportadora_nome_por_id.get(id))
+                .cloned()
+                .unwrap_or_else(|| "Transportadora não identificada".to_string());
+
+            alertas.push(DashboardAlertaItem {
+                id: format!("{}-campos", orcamento_id),
+                orcamento_id: orcamento_id.clone(),
+                transportadora,
+                transportadora_id: orcamento
+                    .propostas
+                    .iter()
+                    .find(|p| orcamento.proposta_ganhadora_id.as_deref() == p.id.as_deref())
+                    .and_then(|p| p.transportadora_id.as_ref())
+                    .map(|oid| oid.to_hex()),
+                msg: format!("Divergência: {}", orcamento.divergencia_campos.join(" | ")),
                 severity: "error".to_string(),
             });
 
@@ -1661,13 +1695,15 @@ async fn escolher_proposta_ganhadora(
                             orcamento.descricao
                         );
                         let body = format!(
-                            "Olá {},\n\n\
-                            Temos o prazer de informar que sua proposta para o orçamento \"{}\" foi aceita.\n\n\
-                            Para darmos continuidade ao processo, solicitamos que nos envie:\n\
-                            1. Dados bancários para pagamento (banco, agência, conta, CNPJ/CPF e razão social);\n\
-                            2. Nota fiscal referente ao frete (CT-e ou NF-e).\n\n\
-                            Por favor, responda este e-mail com as informações acima o mais breve possível.\n\n\
-                            Obrigado e aguardamos seu retorno.\n",
+                            "<p>Olá {},</p>\n\
+                            <p>Temos o prazer de informar que sua proposta para o orçamento \"{}\" foi aceita.</p>\n\
+                            <p>Para darmos continuidade ao processo, solicitamos que nos envie:</p>\n\
+                            <ul>\n\
+                              <li>Dados bancários para pagamento (banco, agência, conta, CNPJ/CPF e razão social)</li>\n\
+                              <li>Nota fiscal referente ao frete (CT-e ou NF-e)</li>\n\
+                            </ul>\n\
+                            <p>Por favor, responda este e-mail com as informações acima o mais breve possível.</p>\n\
+                            <p>Obrigado e aguardamos seu retorno.</p>",
                             transportadora.nome,
                             orcamento.descricao,
                         );
@@ -1919,7 +1955,19 @@ async fn send_orcamento_request_email(
 
         let subject = format!("Solicitação de orçamento - nota {}", nota.trim());
         let body = format!(
-            "Olá {},\n\nSolicito orçamento para os seguintes dados:\n\nDescrição: {}\nNota: {}\nValor do produto: {}\nPeso: {}\nCEP destino: {}\nEndereço destino: {}\nData de criação: {}\n\nPor favor, envie sua proposta com prazo e valor o mais breve possível.\n\nObrigado.",
+            "<p>Olá {},</p>\n\n\
+            <p>Solicito orçamento para os seguintes dados:</p>\n\n\
+            <table cellpadding=\"0\" cellspacing=\"0\" style=\"border-collapse:collapse;\">\n\
+              <tr><td><strong>Descrição:</strong></td><td>{}</td></tr>\n\
+              <tr><td><strong>Nota:</strong></td><td>{}</td></tr>\n\
+              <tr><td><strong>Valor do produto:</strong></td><td>{}</td></tr>\n\
+              <tr><td><strong>Peso:</strong></td><td>{}</td></tr>\n\
+              <tr><td><strong>CEP destino:</strong></td><td>{}</td></tr>\n\
+              <tr><td><strong>Endereço destino:</strong></td><td>{}</td></tr>\n\
+              <tr><td><strong>Data de criação:</strong></td><td>{}</td></tr>\n\
+            </table>\n\n\
+            <p>Por favor, envie sua proposta com prazo e valor o mais breve possível.</p>\n\n\
+            <p>Obrigado.</p>",
             transportadora.nome,
             descricao.trim(),
             nota.trim(),
@@ -2612,13 +2660,74 @@ async fn excluir_email(email_id: String) -> Result<String, String> {
     Ok("Email excluído".to_string())
 }
 
+/// Busca o XML CT-e do email de nota associado a um orçamento e retorna em base64.
+#[tauri::command]
+async fn buscar_xml_orcamento(orcamento_id: String) -> Result<String, String> {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+
+    let database = db::get_database().await?;
+    let orcamento_oid = mongodb::bson::oid::ObjectId::parse_str(&orcamento_id)
+        .map_err(|e| format!("ID de orçamento inválido: {}", e))?;
+
+    // Buscar email de nota aplicado a este orçamento
+    let email = database
+        .emails_processados
+        .find_one(mongodb::bson::doc! {
+            "orcamento_id": orcamento_oid,
+            "tipo": "nota",
+        })
+        .await
+        .map_err(|e| format!("Erro ao buscar email: {}", e))?
+        .ok_or_else(|| "Nenhum email de nota encontrado para este orçamento".to_string())?;
+
+    let gmail = gmail_client::GmailClient::authenticate().await?;
+    let msg = gmail
+        .get_message(&email.gmail_message_id)
+        .await
+        .map_err(|e| format!("Erro ao buscar mensagem Gmail: {}", e))?;
+
+    let xml_attachments = msg
+        .payload
+        .as_ref()
+        .map(gmail_client::collect_xml_attachment_ids)
+        .unwrap_or_default();
+
+    if xml_attachments.is_empty() {
+        return Err("Nenhum anexo XML encontrado no email de nota".to_string());
+    }
+
+    let (att_id, _filename) = &xml_attachments[0];
+    let xml_bytes = gmail
+        .get_attachment(&email.gmail_message_id, att_id)
+        .await
+        .map_err(|e| format!("Erro ao baixar XML: {}", e))?;
+
+    Ok(STANDARD.encode(&xml_bytes))
+}
 /// Extracts NF number from a 44-digit chave (positions 25-34, 0-indexed)
 fn extrair_numero_nf_da_chave(chave: &str) -> String {
     let digits: String = chave.chars().filter(|c| c.is_ascii_digit()).collect();
-    if digits.len() >= 34 {
-        digits[25..34].trim_start_matches('0').to_string()
+    // NF-e access key structure: cUF(2)+AAMM(4)+CNPJ(14)+mod(2)+serie(3)+nNF(9)+tpEmis(1)+cNF(8)+cDV(1)
+    if digits.len() >= 43 {
+        let n = &digits[25..34]; // nNF is exactly 9 digits at positions [25:34]
+        n.trim_start_matches('0').to_string()
     } else {
         String::new()
+    }
+}
+
+/// Compares two NF numbers ignoring leading zeros (treats them as integers).
+/// Returns true if they represent the same number.
+fn nf_numeros_iguais(a: &str, b: &str) -> bool {
+    let digits_a: String = a.chars().filter(|c| c.is_ascii_digit()).collect();
+    let digits_b: String = b.chars().filter(|c| c.is_ascii_digit()).collect();
+    if digits_a.is_empty() || digits_b.is_empty() {
+        return false;
+    }
+    // Parse as u64 to ignore all leading zeros
+    match (digits_a.parse::<u64>(), digits_b.parse::<u64>()) {
+        (Ok(na), Ok(nb)) => na == nb,
+        _ => digits_a.trim_start_matches('0') == digits_b.trim_start_matches('0'),
     }
 }
 
@@ -2718,6 +2827,10 @@ async fn comparar_cte_xml(orcamento_id: String, xml_base64: String) -> Result<se
         .map_err(|e| format!("Erro ao buscar orçamento: {}", e))?
         .ok_or_else(|| "Orçamento não encontrado".to_string())?;
 
+    // Campos já aceitos pelo usuário como não-divergência — serão ignorados na análise
+    let campos_aceitos_set: std::collections::HashSet<String> =
+        orcamento.divergencia_campos_aceitos.iter().cloned().collect();
+
     let proposta_ganhadora = orcamento.proposta_ganhadora_id.as_deref()
         .and_then(|gid| orcamento.propostas.iter().find(|p| p.id.as_deref() == Some(gid)));
 
@@ -2806,12 +2919,24 @@ async fn comparar_cte_xml(orcamento_id: String, xml_base64: String) -> Result<se
     }));
 
     // Peso
-    let peso_orc = orcamento.peso_total.or(orcamento.peso).unwrap_or(0.0);
-    let div = peso_orc > 0.0 && cte.peso_real > 0.0 && (peso_orc - cte.peso_real).abs() > 0.5;
+    let peso_orc = orcamento.peso_total.or(orcamento.peso);
+    let peso_orc_val = peso_orc.unwrap_or(0.0);
+    let mut div = false;
+    if peso_orc.is_some() && cte.peso_real > 0.0 {
+        let total_match = orcamento
+            .peso_total
+            .map(|v| (v - cte.peso_real).abs() < 1e-6)
+            .unwrap_or(false);
+        let peso_match = orcamento
+            .peso
+            .map(|v| (v - cte.peso_real).abs() < 1e-6)
+            .unwrap_or(false);
+        div = !total_match && !peso_match;
+    }
     if div { tem_divergencia = true; }
     campos.push(serde_json::json!({
         "campo": "Peso (kg)",
-        "valor_orcamento": if peso_orc > 0.0 { format!("{:.3}", peso_orc) } else { "-".to_string() },
+        "valor_orcamento": if peso_orc_val > 0.0 { format!("{:.3}", peso_orc_val) } else { "-".to_string() },
         "valor_xml": if cte.peso_real > 0.0 { format!("{:.3}", cte.peso_real) } else { "-".to_string() },
         "divergente": div
     }));
@@ -2843,10 +2968,8 @@ async fn comparar_cte_xml(orcamento_id: String, xml_base64: String) -> Result<se
         .or(orcamento.nota.as_deref())
         .unwrap_or("").trim().to_string();
     let nf_numero_xml = extrair_numero_nf_da_chave(&cte.chave_nfe);
-    let div = !nota_orc.is_empty() && !nf_numero_xml.is_empty() && {
-        let nota_stripped: String = nota_orc.chars().filter(|c| c.is_ascii_digit()).collect();
-        nota_stripped.trim_start_matches('0') != nf_numero_xml.trim_start_matches('0')
-    };
+    let div = !nota_orc.is_empty() && !nf_numero_xml.is_empty()
+        && !nf_numeros_iguais(&nota_orc, &nf_numero_xml);
     if div { tem_divergencia = true; }
     campos.push(serde_json::json!({
         "campo": "Número de Nota",
@@ -2880,6 +3003,53 @@ async fn comparar_cte_xml(orcamento_id: String, xml_base64: String) -> Result<se
         "valor_xml": if cte.valor_carga > 0.0 { format!("R$ {:.2}", cte.valor_carga) } else { "-".to_string() },
         "divergente": div
     }));
+
+    // Ignorar campos que o usuário já aceitou como não-divergência
+    if !campos_aceitos_set.is_empty() {
+        for campo in campos.iter_mut() {
+            if let Some(nome) = campo.get("campo").and_then(|v| v.as_str()) {
+                if campos_aceitos_set.contains(nome) {
+                    campo["divergente"] = serde_json::json!(false);
+                }
+            }
+        }
+        // Recalcular flag global após filtrar aceitos
+        tem_divergencia = campos
+            .iter()
+            .any(|c| c.get("divergente").and_then(|v| v.as_bool()).unwrap_or(false));
+    }
+
+    // Persistir divergencia_campos no banco com todos os campos divergentes encontrados
+    let campos_divergentes_nomes: Vec<String> = campos
+        .iter()
+        .filter(|c| c.get("divergente").and_then(|v| v.as_bool()).unwrap_or(false))
+        .map(|c| {
+            let campo = c.get("campo").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let orc = c.get("valor_orcamento").and_then(|v| v.as_str()).unwrap_or("-");
+            let xml = c.get("valor_xml").and_then(|v| v.as_str()).unwrap_or("-");
+            format!("{}: orçamento={}, XML={}", campo, orc, xml)
+        })
+        .collect();
+
+    // Sempre atualizar divergencia_campos (limpa entradas desatualizadas de análises anteriores)
+    let campos_bson: Vec<mongodb::bson::Bson> = campos_divergentes_nomes
+        .iter()
+        .map(|c| mongodb::bson::Bson::String(c.clone()))
+        .collect();
+    let mut set_doc = mongodb::bson::doc! {
+        "divergencia_campos": campos_bson,
+    };
+    if !campos_divergentes_nomes.is_empty() {
+        set_doc.insert("divergencia_tratada", false);
+        set_doc.insert("divergencia_email_status", "pendente");
+    }
+    let _ = database
+        .orcamentos
+        .update_one(
+            mongodb::bson::doc! { "_id": orcamento_oid },
+            mongodb::bson::doc! { "$set": set_doc },
+        )
+        .await;
 
     Ok(serde_json::json!({
         "orcamento_id": orcamento_id,
@@ -2928,14 +3098,20 @@ async fn enviar_email_divergencia(
         .or(orcamento.nota.as_deref()).unwrap_or("");
     let numero_cotacao = orcamento.numero_cotacao.as_deref().unwrap_or("");
     let campos_str = campos_divergentes.iter()
-        .map(|c| format!("  - {}", c))
+        .map(|c| format!("<li>{}</li>", c))
         .collect::<Vec<_>>()
         .join("\n");
 
     let subject = format!("Divergência detectada - NF:{} COT:{}", numero_nota, numero_cotacao);
     let body = format!(
-        "Prezada {},\n\nIdentificamos divergências no frete referente ao orçamento {}.\n\nCampos com divergência:\n{}\n\nSolicito correção ou esclarecimento dos campos acima.\nPor favor, responda este e-mail com as devidas correções.\n\nAtenciosamente,\nEquipe Ultimax - Monitor de Fretes",
-        transportadora.nome, orcamento.descricao, campos_str,
+        "<p>Prezada {},</p>\n\n\
+        <p>Identificamos divergências no frete referente ao orçamento <strong>{}</strong>.</p>\n\n\
+        <p><strong>Campos com divergência:</strong></p>\n\
+        <ul>\n{}\n</ul>\n\
+        <p>Solicito correção ou esclarecimento dos campos acima.</p>\n\
+        <p>Por favor, responda este e-mail com as devidas correções.</p>\n\n\
+        <p>Atenciosamente,<br/>Equipe Ultimax - Monitor de Fretes</p>",
+        transportadora.nome, orcamento.descricao, campos_str
     );
 
     let gmail = gmail_client::GmailClient::authenticate().await?;
@@ -2992,6 +3168,54 @@ async fn finalizar_divergencia(orcamento_id: String) -> Result<String, String> {
     Ok("Divergência finalizada".to_string())
 }
 
+/// Persists the remaining divergent fields (after user-accepted ones are removed)
+/// and adjusts status: if nothing pending, marks as todos_verificados.
+#[tauri::command]
+async fn salvar_campos_divergencia(
+    orcamento_id: String,
+    campos_pendentes: Vec<String>,
+    campos_aceitos: Vec<String>,
+) -> Result<String, String> {
+    let database = db::get_database().await?;
+    let orcamento_oid = mongodb::bson::oid::ObjectId::parse_str(&orcamento_id)
+        .map_err(|e| format!("ID de orçamento inválido: {}", e))?;
+
+    let campos_bson: Vec<mongodb::bson::Bson> = campos_pendentes
+        .iter()
+        .map(|c| mongodb::bson::Bson::String(c.clone()))
+        .collect();
+
+    let campos_aceitos_bson: Vec<mongodb::bson::Bson> = campos_aceitos
+        .iter()
+        .map(|c| mongodb::bson::Bson::String(c.clone()))
+        .collect();
+
+    // If all fields have been verified, mark as resolved automatically
+    let (status, tratada): (&str, bool) = if campos_pendentes.is_empty() {
+        ("todos_verificados", true)
+    } else {
+        ("pendente", false)
+    };
+
+    database
+        .orcamentos
+        .update_one(
+            mongodb::bson::doc! { "_id": orcamento_oid },
+            mongodb::bson::doc! {
+                "$set": {
+                    "divergencia_campos": campos_bson,
+                    "divergencia_campos_aceitos": campos_aceitos_bson,
+                    "divergencia_email_status": status,
+                    "divergencia_tratada": tratada,
+                }
+            },
+        )
+        .await
+        .map_err(|e| format!("Erro ao salvar campos: {}", e))?;
+
+    Ok("Campos de divergência atualizados".to_string())
+}
+
 /// Reverts a divergence back to pending state.
 #[tauri::command]
 async fn reverter_divergencia(orcamento_id: String) -> Result<String, String> {
@@ -3012,6 +3236,7 @@ async fn reverter_divergencia(orcamento_id: String) -> Result<String, String> {
                     "divergencia_email_correcao": "",
                     "divergencia_email_enviado_em": "",
                     "divergencia_campos": "",
+                    "divergencia_campos_aceitos": "",
                 }
             },
         )
@@ -3063,6 +3288,7 @@ pub fn run() {
             descartar_email,
             excluir_orcamento,
             excluir_email,
+            buscar_xml_orcamento,
             set_tray_divergencias,
             get_transportadora_metricas,
             google_auth_get_status,
@@ -3078,7 +3304,8 @@ pub fn run() {
             comparar_cte_xml,
             enviar_email_divergencia,
             finalizar_divergencia,
-            reverter_divergencia
+            reverter_divergencia,
+            salvar_campos_divergencia
         ])
         .setup(|app| {
             // Watcher state management

@@ -111,7 +111,16 @@ XML:
     );
 
     let resposta = call_gemini(&prompt).await?;
-    let resposta = resposta.trim();
+    let mut resposta = resposta.trim();
+    if resposta.starts_with("```json") {
+        resposta = resposta.trim_start_matches("```json").trim();
+    }
+    if resposta.starts_with("```") {
+        resposta = resposta.trim_start_matches("```").trim();
+    }
+    if resposta.ends_with("```") {
+        resposta = resposta.trim_end_matches("```").trim();
+    }
 
     let parsed: serde_json::Value = serde_json::from_str(resposta)
         .map_err(|e| format!("Gemini retornou JSON inválido: {} | resposta: {}", e, resposta))?;
@@ -281,5 +290,38 @@ CORPO DO EMAIL:
     } else {
         // Fallback: escolhe o primeiro
         Ok(Some(descricoes_disponiveis[0].clone()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_inferir_campos_cte() {
+        dotenv::from_filename(".env").ok();
+
+        let xml = r#"<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<cteProc xmlns=\"http://www.portalfiscal.inf.br/cte\" versao=\"4.00\">
+<CTe xmlns=\"http://www.portalfiscal.inf.br/cte\"><infCte Id=\"CTe41260333535024000285570010000000601000291273\" versao=\"4.00\">
+<ide><cUF>41</cUF><cCT>00029127</cCT><CFOP>6353</CFOP><natOp>Transp a est comercial</natOp><mod>57</mod><serie>1</serie><nCT>60</nCT></ide>
+<emit><CNPJ>33535024000285</CNPJ></emit>
+<rem><CNPJ>51540489000125</CNPJ></rem>
+<infCTeNorm><infCarga>
+<infQ><tpMed>PESO REAL</tpMed><qCarga>60.0000</qCarga></infQ>
+<infQ><tpMed>M3</tpMed><qCarga>0.3542</qCarga></infQ>
+<infQ><tpMed>UNIDADE</tpMed><qCarga>1</qCarga></infQ>
+<vCarga>598.32</vCarga>
+</infCarga><infDoc><infNFe><chave>41260351540489000125550010000111971755985292</chave></infNFe></infDoc></infCTeNorm>
+</infCte></CTe></cteProc>"#;
+
+        let campos = ["peso_real", "volume_m3", "qtd_volumes"];
+        let resultado = inferir_campos_cte(xml, &campos)
+            .await
+            .expect("Falha no fallback de IA");
+
+        assert!(resultado.get("peso_real").map(|v| !v.is_empty()).unwrap_or(false));
+        assert!(resultado.get("volume_m3").map(|v| !v.is_empty()).unwrap_or(false));
+        assert!(resultado.get("qtd_volumes").map(|v| !v.is_empty()).unwrap_or(false));
     }
 }

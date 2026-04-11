@@ -131,15 +131,6 @@ const OrcamentosScreen = (props: OrcamentosScreenProps) => {
           <Stack spacing={2}>
             <Stack direction="row" spacing={2}>
               <TextField
-                label="Número de Nota"
-                value={novoOrcamento.numero_nota}
-                onChange={(event) =>
-                  setNovoOrcamento((prev) => ({ ...prev, numero_nota: event.target.value }))
-                }
-                sx={{ '& .MuiOutlinedInput-root': { borderRadius: 0 } }}
-                fullWidth
-              />
-              <TextField
                 label="Número de Cotação"
                 value={novoOrcamento.numero_cotacao}
                 onChange={(event) =>
@@ -148,8 +139,6 @@ const OrcamentosScreen = (props: OrcamentosScreenProps) => {
                 sx={{ '& .MuiOutlinedInput-root': { borderRadius: 0 } }}
                 fullWidth
               />
-            </Stack>
-            <Stack direction="row" spacing={2}>
               <TextField
                 label="Data de criação"
                 type="date"
@@ -174,15 +163,54 @@ const OrcamentosScreen = (props: OrcamentosScreenProps) => {
               sx={{ '& .MuiOutlinedInput-root': { borderRadius: 0 } }}
               fullWidth
             />
-            <TextField
-              label="Endereço de destino"
-              value={novoOrcamento.endereco_destino}
-              onChange={(event) =>
-                setNovoOrcamento((prev) => ({ ...prev, endereco_destino: event.target.value }))
-              }
-              sx={{ '& .MuiOutlinedInput-root': { borderRadius: 0 } }}
-              fullWidth
-            />
+            <Stack direction="row" spacing={2}>
+              <TextField
+                label="Logradouro"
+                value={novoOrcamento.logradouro_destino}
+                onChange={(event) =>
+                  setNovoOrcamento((prev) => ({ ...prev, logradouro_destino: event.target.value }))
+                }
+                sx={{ '& .MuiOutlinedInput-root': { borderRadius: 0 } }}
+                fullWidth
+              />
+              <TextField
+                label="Número"
+                value={novoOrcamento.numero_destino}
+                onChange={(event) =>
+                  setNovoOrcamento((prev) => ({ ...prev, numero_destino: event.target.value }))
+                }
+                sx={{ maxWidth: 140, '& .MuiOutlinedInput-root': { borderRadius: 0 } }}
+              />
+            </Stack>
+            <Stack direction="row" spacing={2}>
+              <TextField
+                label="Bairro"
+                value={novoOrcamento.bairro_destino}
+                onChange={(event) =>
+                  setNovoOrcamento((prev) => ({ ...prev, bairro_destino: event.target.value }))
+                }
+                sx={{ '& .MuiOutlinedInput-root': { borderRadius: 0 } }}
+                fullWidth
+              />
+              <TextField
+                label="Cidade"
+                value={novoOrcamento.cidade_destino}
+                onChange={(event) =>
+                  setNovoOrcamento((prev) => ({ ...prev, cidade_destino: event.target.value }))
+                }
+                sx={{ '& .MuiOutlinedInput-root': { borderRadius: 0 } }}
+                fullWidth
+              />
+              <TextField
+                label="UF"
+                value={novoOrcamento.uf_destino}
+                onChange={(event) =>
+                  setNovoOrcamento((prev) => ({ ...prev, uf_destino: event.target.value }))
+                }
+                sx={{ '& .MuiOutlinedInput-root': { borderRadius: 0 } }}
+                fullWidth
+              />
+            </Stack>
             <Stack direction="row" spacing={2}>
               <TextField
                 label="Nota"

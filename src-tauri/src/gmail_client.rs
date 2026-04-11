@@ -412,13 +412,39 @@ impl GmailClient {
         decode_gmail_body_bytes(&data).ok_or_else(|| "Erro ao decodificar attachment base64".to_string())
     }
 
+    fn build_email_html(body_content: &str, logo_cid: &str) -> String {
+        format!(
+            "<!DOCTYPE html><html><body style=\"margin:0;padding:0;background:#f3f4f6;font-family:Arial,Helvetica,sans-serif;color:#111827;\">\
+            <table align=\"center\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"max-width:640px;margin:0 auto;background:#ffffff;border-radius:12px;overflow:hidden;border:1px solid #e5e7eb;\">\
+              <tr><td style=\"background:#111827;padding:28px 24px;text-align:center;\"><img src=\"cid:{}\" alt=\"Ultimax Monitor de Fretes\" style=\"max-width:100%;height:auto;border:none;\"/><p style=\"margin:16px 0 0;color:#d1d5db;font-size:14px;\">Solução de monitoramento de fretes e divergências</p></td></tr>\
+              <tr><td style=\"padding:28px 24px;font-size:15px;line-height:1.7;color:#111827;\">{}</td></tr>\
+              <tr><td style=\"background:#f9fafb;padding:18px 24px;font-size:13px;color:#6b7280;text-align:center;\">Este email foi enviado automaticamente pelo Ultimax Monitor de Fretes.</td></tr>\
+            </table></body></html>",
+            logo_cid,
+            body_content
+        )
+    }
+
     pub async fn send_email(&self, to: &str, subject: &str, body_text: &str) -> Result<(), String> {
         // RFC 2047: encode subject with non-ASCII chars as =?UTF-8?B?<base64>?=
         let encoded_subject = format!("=?UTF-8?B?{}?=", STANDARD.encode(subject.as_bytes()));
+        let logo_bytes = include_bytes!("../icons/logo_ultimax.png");
+        let encoded_logo = STANDARD.encode(logo_bytes);
+        let logo_cid = "ultimax_logo_cid";
+        let body_html = Self::build_email_html(body_text, logo_cid);
+        let boundary = "----=_Ultimax_Logo_Boundary_123456";
 
         let raw_message = format!(
-            "From: me\r\nTo: {}\r\nSubject: {}\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\nMIME-Version: 1.0\r\n\r\n{}",
-            to, encoded_subject, body_text
+            "From: me\r\nTo: {}\r\nSubject: {}\r\nMIME-Version: 1.0\r\nContent-Type: multipart/related; boundary=\"{}\"\r\n\r\n--{}\r\nContent-Type: text/html; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n{}\r\n--{}\r\nContent-Type: image/png\r\nContent-Transfer-Encoding: base64\r\nContent-ID: <{}>\r\nContent-Disposition: inline; filename=\"logo_ultimax.png\"\r\n\r\n{}\r\n--{}--\r\n",
+            to,
+            encoded_subject,
+            boundary,
+            boundary,
+            body_html,
+            boundary,
+            logo_cid,
+            encoded_logo,
+            boundary
         );
 
         let encoded = URL_SAFE_NO_PAD.encode(raw_message.as_bytes());

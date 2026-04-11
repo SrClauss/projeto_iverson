@@ -1,4 +1,4 @@
-use mongodb::{Client, Collection};
+use mongodb::{bson::doc, options::IndexOptions, Client, Collection, IndexModel};
 use std::env;
 pub mod models;
 
@@ -52,11 +52,24 @@ impl Database {
     pub async fn new(uri: &str, db_name: &str) -> mongodb::error::Result<Self> {
         let client = Client::with_uri_str(uri).await?;
         let db = client.database(db_name);
+        let emails_processados = db.collection("emails_processados");
+
+        let index_model = IndexModel::builder()
+            .keys(doc! { "gmail_message_id": 1 })
+            .options(
+                IndexOptions::builder()
+                    .unique(true)
+                    .name("gmail_message_id_unique".to_string())
+                    .build(),
+            )
+            .build();
+
+        emails_processados.create_index(index_model).await?;
 
         Ok(Self {
             transportadoras: db.collection("transportadoras"),
             orcamentos: db.collection("orcamentos"),
-            emails_processados: db.collection("emails_processados"),
+            emails_processados,
             watcher_state: db.collection("watcher_state"),
             notificacoes: db.collection("notificacoes"),
         })

@@ -18,6 +18,8 @@ import {
   TextField,
   Paper,
   Collapse,
+  Tooltip,
+  IconButton,
 } from '@mui/material';
 import {
   ArrowBack,
@@ -29,6 +31,8 @@ import {
   ExpandMore,
   ExpandLess,
   MarkEmailRead,
+  ThumbUp,
+  RestartAlt,
 } from '@mui/icons-material';
 import { invoke } from '@tauri-apps/api/core';
 import { glassPanel } from '../styles/glass';
@@ -82,6 +86,73 @@ const DivergenciasScreen = (props: DivergenciasScreenProps) => {
   const [xmlError, setXmlError] = React.useState<string | null>(null);
   const [successMsg, setSuccessMsg] = React.useState<string | null>(null);
   const [correcaoExpandida, setCorrecaoExpandida] = React.useState(false);
+  const [camposAceitos, setCamposAceitos] = React.useState<Set<string>>(new Set());
+  const [autoFetchando, setAutoFetchando] = React.useState(false);
+  const autoFetchedId = React.useRef<string | null>(null);
+  const [inputManualAberto, setInputManualAberto] = React.useState(false);
+
+  const toggleAceito = async (campo: string) => {
+    if (!orcamentoDetalhe || !comparacao) return;
+    const next = new Set(camposAceitos);
+    if (next.has(campo)) next.delete(campo); else next.add(campo);
+    setCamposAceitos(next);
+
+    // Campos que ainda estão divergentes e não foram aceitos
+    const pendentes = comparacao.campos
+      .filter((c: CampoComparacao) => c.divergente && !next.has(c.campo))
+      .map((c: CampoComparacao) => `${c.campo}: orçamento=${c.valor_orcamento}, XML=${c.valor_xml}`);
+
+    // Nomes curtos dos campos aceitos (para persistir e ignorar em análises futuras)
+    const aceitos = Array.from(next);
+
+    try {
+      await invoke('salvar_campos_divergencia', {
+        orcamentoId: orcamentoDetalhe.id,
+        camposPendentes: pendentes,
+        camposAceitos: aceitos,
+      });
+      // Atualiza painel esquerdo com novo status
+      const updated = await invoke<OrcamentoDetalhe>('get_orcamento_detalhe', { orcamentoId: orcamentoDetalhe.id });
+      props.setOrcamentoDetalhe(updated);
+    } catch (_) {
+      // falha silenciosa — estado local já está correto
+    }
+  };
+
+  // Auto-buscar e analisar XML ao entrar na tela
+  React.useEffect(() => {
+    if (!orcamentoDetalhe) return;
+    if (autoFetchedId.current === orcamentoDetalhe.id) return; // já fez para este orçamento
+    autoFetchedId.current = orcamentoDetalhe.id;
+    setInputManualAberto(false); // fechar input manual ao trocar de orçamento
+    setAutoFetchando(true);
+    setXmlError(null);
+    invoke<string>('buscar_xml_orcamento', { orcamentoId: orcamentoDetalhe.id })
+      .then((b64) => rodarComparacao(b64))
+      .catch(() => { /* silencioso — usuario pode colar manualmente */ })
+      .finally(() => setAutoFetchando(false));
+  }, [orcamentoDetalhe?.id]);
+
+  const rodarComparacao = async (b64: string) => {
+    if (!orcamentoDetalhe) return;
+    setXmlError(null);
+    setComparacao(null);
+    setComparandoXml(true);
+    try {
+      const result = await invoke<CteComparacao>('comparar_cte_xml', {
+        orcamentoId: orcamentoDetalhe.id,
+        xmlBase64: b64,
+      });
+      setComparacao(result);
+      setCamposAceitos(new Set());
+      const updated = await invoke<OrcamentoDetalhe>('get_orcamento_detalhe', { orcamentoId: orcamentoDetalhe.id });
+      props.setOrcamentoDetalhe(updated);
+    } catch (err) {
+      setXmlError(String(err));
+    } finally {
+      setComparandoXml(false);
+    }
+  };
 
   const emailStatus = orcamentoDetalhe?.divergencia_email_status ?? 'pendente';
   const camposDivergentes = orcamentoDetalhe?.divergencia_campos ?? [];
@@ -90,33 +161,19 @@ const DivergenciasScreen = (props: DivergenciasScreenProps) => {
 
   const handleCompararXml = async () => {
     if (!orcamentoDetalhe || !xmlInput.trim()) return;
-    setXmlError(null);
-    setComparacao(null);
-    setComparandoXml(true);
-    try {
-      // Accept raw XML or base64; convert raw XML to base64 if needed
-      let b64 = xmlInput.trim();
-      if (b64.startsWith('<') || b64.startsWith('<?')) {
-        b64 = btoa(unescape(encodeURIComponent(b64)));
-      }
-      const result = await invoke<CteComparacao>('comparar_cte_xml', {
-        orcamentoId: orcamentoDetalhe.id,
-        xmlBase64: b64,
-      });
-      setComparacao(result);
-    } catch (err) {
-      setXmlError(String(err));
-    } finally {
-      setComparandoXml(false);
+    let b64 = xmlInput.trim();
+    if (b64.startsWith('<') || b64.startsWith('<?')) {
+      b64 = btoa(unescape(encodeURIComponent(b64)));
     }
+    await rodarComparacao(b64);
   };
 
   const handleEnviarEmail = async () => {
     if (!orcamentoDetalhe || !comparacao) return;
     const campos = comparacao.campos
-      .filter((c: CampoComparacao) => c.divergente)
+      .filter((c: CampoComparacao) => c.divergente && !camposAceitos.has(c.campo))
       .map((c: CampoComparacao) => `${c.campo}: orçamento=${c.valor_orcamento}, XML=${c.valor_xml}`);
-    if (campos.length === 0) { setXmlError('Nenhum campo divergente encontrado.'); return; }
+    if (campos.length === 0) { setXmlError('Todos os campos divergentes foram aceitos como OK. Nenhum email será enviado.'); return; }
     setEnviandoEmail(true);
     setXmlError(null);
     try {
@@ -221,7 +278,11 @@ const DivergenciasScreen = (props: DivergenciasScreenProps) => {
                 { label: 'Nº Cotação', value: orcamentoDetalhe.numero_cotacao ?? '-' },
                 { label: 'Data de Criação', value: orcamentoDetalhe.data_criacao },
                 { label: 'CEP de destino', value: orcamentoDetalhe.cep_destino ?? '-' },
-                { label: 'Endereço de destino', value: orcamentoDetalhe.endereco_destino ?? '-' },
+                { label: 'Logradouro', value: orcamentoDetalhe.logradouro_destino ?? '-' },
+                { label: 'Número', value: orcamentoDetalhe.numero_destino ?? '-' },
+                { label: 'Bairro', value: orcamentoDetalhe.bairro_destino ?? '-' },
+                { label: 'Cidade', value: orcamentoDetalhe.cidade_destino ?? '-' },
+                { label: 'UF', value: orcamentoDetalhe.uf_destino ?? '-' },
                 { label: 'Valor do produto', value: orcamentoDetalhe.valor_produto ? `R$ ${orcamentoDetalhe.valor_produto.toFixed(2)}` : '-' },
                 { label: 'Peso', value: orcamentoDetalhe.peso ? `${orcamentoDetalhe.peso.toFixed(3)} kg` : '-' },
                 { label: 'CNPJ Remetente', value: orcamentoDetalhe.cnpj_pagador ?? '-' },
@@ -379,31 +440,56 @@ const DivergenciasScreen = (props: DivergenciasScreenProps) => {
         {/* Análise de XML CT-e */}
         {orcamentoDetalhe && (
           <Box sx={{ ...glassPanel, p: 3, gridColumn: { xs: '1', lg: '1 / -1' } }}>
-            <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 2 }}>
+            <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 2, flexWrap: 'wrap', gap: 1 }}>
               <EmailIcon sx={{ color: '#6366f1' }} />
               <Typography variant="h6" sx={{ fontWeight: 800 }}>Análise de CT-e XML</Typography>
+              {comparacao && !autoFetchando && (
+                <Chip label="XML do email analisado" size="small" color="success" sx={{ fontWeight: 700 }} />
+              )}
             </Stack>
             <Stack spacing={2}>
-              <TextField
-                label="Cole o conteúdo do XML CT-e aqui"
-                multiline
-                rows={4}
-                value={xmlInput}
-                onChange={(e) => setXmlInput(e.target.value)}
-                fullWidth
-                sx={{ '& .MuiOutlinedInput-root': { fontFamily: 'monospace', fontSize: '0.8rem', borderRadius: '10px' } }}
-                placeholder="<?xml version=&quot;1.0&quot;?><CTeOS>...</CTeOS>"
-              />
-              <Stack direction="row" spacing={1}>
-                <Button
-                  variant="contained"
-                  onClick={handleCompararXml}
-                  disabled={comparandoXml || !xmlInput.trim()}
-                  sx={{ borderRadius: '10px', textTransform: 'none', fontWeight: 700 }}
-                >
-                  {comparandoXml ? 'Analisando...' : 'Analisar XML'}
-                </Button>
-                {comparacao?.tem_divergencia && emailStatus === 'pendente' && (
+              {/* Input manual — recolhido quando já há análise carregada */}
+              <Collapse in={inputManualAberto || (!comparacao && !autoFetchando)}>
+                <Stack spacing={1.5}>
+                  <TextField
+                    label="Cole o conteúdo do XML CT-e aqui"
+                    multiline
+                    rows={4}
+                    value={xmlInput}
+                    onChange={(e) => setXmlInput(e.target.value)}
+                    fullWidth
+                    sx={{ '& .MuiOutlinedInput-root': { fontFamily: 'monospace', fontSize: '0.8rem', borderRadius: '10px' } }}
+                    placeholder="<?xml version=&quot;1.0&quot;?><CTeOS>...</CTeOS>"
+                  />
+                  <Button
+                    variant="contained"
+                    onClick={handleCompararXml}
+                    disabled={comparandoXml || !xmlInput.trim()}
+                    sx={{ borderRadius: '10px', textTransform: 'none', fontWeight: 700, alignSelf: 'flex-start' }}
+                  >
+                    {comparandoXml ? 'Analisando...' : 'Analisar XML'}
+                  </Button>
+                </Stack>
+              </Collapse>
+
+              {/* Botões de ação principais */}
+              <Stack direction="row" spacing={1} flexWrap="wrap" alignItems="center">
+                {autoFetchando && (
+                  <Chip label="Buscando XML do email..." size="small" color="info" sx={{ fontWeight: 700 }} />
+                )}
+                {comparacao && !autoFetchando && (
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    onClick={() => setInputManualAberto(v => !v)}
+                    sx={{ borderRadius: '10px', textTransform: 'none', fontWeight: 600, fontSize: '0.75rem' }}
+                  >
+                    {inputManualAberto ? 'Fechar input manual' : 'Analisar outro XML manualmente'}
+                  </Button>
+                )}
+                {comparacao?.tem_divergencia &&
+                comparacao.campos.some((c: CampoComparacao) => c.divergente && !camposAceitos.has(c.campo)) &&
+                emailStatus === 'pendente' && (
                   <Button
                     variant="contained"
                     color="error"
@@ -412,19 +498,37 @@ const DivergenciasScreen = (props: DivergenciasScreenProps) => {
                     disabled={enviandoEmail}
                     sx={{ borderRadius: '10px', textTransform: 'none', fontWeight: 700 }}
                   >
-                    {enviandoEmail ? 'Enviando...' : 'Enviar Email de Divergência'}
+                    {enviandoEmail
+                      ? 'Enviando...'
+                      : `Enviar Email (${comparacao.campos.filter((c: CampoComparacao) => c.divergente && !camposAceitos.has(c.campo)).length} campo(s))`}
                   </Button>
                 )}
               </Stack>
 
               {comparacao && (
                 <Box>
-                  <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
-                    <Chip
-                      label={comparacao.tem_divergencia ? `${comparacao.campos.filter((c: CampoComparacao) => c.divergente).length} campo(s) divergente(s)` : 'Sem divergências'}
-                      color={comparacao.tem_divergencia ? 'error' : 'success'}
-                      sx={{ fontWeight: 700 }}
-                    />
+                  <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }} flexWrap="wrap">
+                    {(() => {
+                      const totalDiv = comparacao.campos.filter((c: CampoComparacao) => c.divergente).length;
+                      const pendentes = totalDiv - camposAceitos.size;
+                      return (
+                        <>
+                          <Chip
+                            label={totalDiv === 0 ? 'Sem divergências' : pendentes === 0 ? 'Todos aceitos como OK' : `${pendentes} campo(s) divergente(s)`}
+                            color={totalDiv === 0 || pendentes === 0 ? 'success' : 'error'}
+                            sx={{ fontWeight: 700 }}
+                          />
+                          {camposAceitos.size > 0 && (
+                            <Chip
+                              label={`${camposAceitos.size} aceito(s) como OK`}
+                              color="warning"
+                              size="small"
+                              sx={{ fontWeight: 700 }}
+                            />
+                          )}
+                        </>
+                      );
+                    })()}
                   </Stack>
                   <TableContainer component={Paper} sx={{ borderRadius: '10px', boxShadow: 'none', border: '1px solid rgba(0,0,0,0.06)' }}>
                     <Table size="small">
@@ -437,24 +541,46 @@ const DivergenciasScreen = (props: DivergenciasScreenProps) => {
                         </TableRow>
                       </TableHead>
                       <TableBody>
-                        {comparacao.campos.map((campo: CampoComparacao) => (
-                          <TableRow
-                            key={campo.campo}
-                            sx={{ bgcolor: campo.divergente ? 'rgba(239,68,68,0.05)' : undefined }}
-                          >
-                            <TableCell sx={{ fontSize: '0.75rem', fontWeight: 600 }}>{campo.campo}</TableCell>
-                            <TableCell sx={{ fontSize: '0.75rem' }}>{campo.valor_orcamento}</TableCell>
-                            <TableCell sx={{ fontSize: '0.75rem' }}>{campo.valor_xml}</TableCell>
-                            <TableCell>
-                              <Chip
-                                label={campo.divergente ? 'Divergente' : 'OK'}
-                                size="small"
-                                color={campo.divergente ? 'error' : 'success'}
-                                sx={{ fontWeight: 700, fontSize: '0.65rem' }}
-                              />
-                            </TableCell>
-                          </TableRow>
-                        ))}
+                        {comparacao.campos.map((campo: CampoComparacao) => {
+                          const aceito = camposAceitos.has(campo.campo);
+                          return (
+                            <TableRow
+                              key={campo.campo}
+                              sx={{
+                                bgcolor: !campo.divergente
+                                  ? undefined
+                                  : aceito
+                                  ? 'rgba(234,179,8,0.06)'
+                                  : 'rgba(239,68,68,0.05)',
+                              }}
+                            >
+                              <TableCell sx={{ fontSize: '0.75rem', fontWeight: 600 }}>{campo.campo}</TableCell>
+                              <TableCell sx={{ fontSize: '0.75rem' }}>{campo.valor_orcamento}</TableCell>
+                              <TableCell sx={{ fontSize: '0.75rem' }}>{campo.valor_xml}</TableCell>
+                              <TableCell>
+                                <Stack direction="row" spacing={0.5} alignItems="center">
+                                  <Chip
+                                    label={!campo.divergente ? 'OK' : aceito ? 'Verificado ✓' : 'Divergente'}
+                                    size="small"
+                                    color={!campo.divergente ? 'success' : aceito ? 'warning' : 'error'}
+                                    sx={{ fontWeight: 700, fontSize: '0.65rem' }}
+                                  />
+                                  {campo.divergente && (
+                                    <Tooltip title={aceito ? 'Marcar como divergente novamente' : 'Aceitar — não enviar no email'}>
+                                      <IconButton
+                                        size="small"
+                                        onClick={() => toggleAceito(campo.campo)}
+                                        sx={{ p: 0.3, color: aceito ? '#b45309' : '#16a34a' }}
+                                      >
+                                        {aceito ? <RestartAlt sx={{ fontSize: 15 }} /> : <ThumbUp sx={{ fontSize: 15 }} />}
+                                      </IconButton>
+                                    </Tooltip>
+                                  )}
+                                </Stack>
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })}
                       </TableBody>
                     </Table>
                   </TableContainer>

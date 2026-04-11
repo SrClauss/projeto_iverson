@@ -2,6 +2,7 @@ use crate::cte_parser;
 use crate::db;
 use crate::gemini_client;
 use crate::gmail_client::{self, GmailClient};
+use mongodb::bson::{doc, to_document};
 use mongodb::bson::oid::ObjectId;
 use notify_rust::Notification;
 use serde::Serialize;
@@ -10,6 +11,65 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::Emitter;
 use tokio::sync::Mutex;
+
+async fn reserve_email_processado(
+    database: &db::Database,
+    msg_id: &str,
+    transportadora_id: ObjectId,
+    transportadora_nome: &str,
+    assunto: &str,
+    remetente: &str,
+    tipo: &str,
+    now_iso: &str,
+) -> Result<bool, String> {
+    let email_doc = db::models::EmailProcessado {
+        id: None,
+        gmail_message_id: msg_id.to_string(),
+        tipo: tipo.to_string(),
+        transportadora_id,
+        transportadora_nome: transportadora_nome.to_string(),
+        orcamento_id: None,
+        orcamento_descricao: None,
+        processado_em: now_iso.to_string(),
+        status: "processing".to_string(),
+        valor_extraido: None,
+        erro: None,
+        assunto: Some(assunto.to_string()),
+        remetente: Some(remetente.to_string()),
+        prazo_extraido: None,
+    };
+
+    match database.emails_processados.insert_one(email_doc,).await {
+        Ok(_) => Ok(true),
+        Err(e) => {
+            if e.to_string().contains("11000") {
+                return Ok(false);
+            }
+            Err(format!("Erro ao reservar email processado: {}", e))
+        }
+    }
+}
+
+async fn atualizar_email_processado(
+    database: &db::Database,
+    msg_id: &str,
+    email_doc: &db::models::EmailProcessado,
+) -> Result<(), String> {
+    let mut document = to_document(email_doc)
+        .map_err(|e| format!("Erro ao serializar email processado: {}", e))?;
+    document.remove("_id");
+
+    database
+        .emails_processados
+        .update_one(
+            doc! { "gmail_message_id": msg_id },
+            doc! { "$set": document },
+        )
+        .await
+        .map_err(|e| format!("Erro ao atualizar email processado: {}", e))?;
+
+    Ok(())
+}
 
 /// Intervalo de polling em segundos
 const POLL_INTERVAL_SECS: u64 = 30;
@@ -263,17 +323,38 @@ async fn poll_once(status: &Arc<Mutex<WatcherStatus>>) -> Result<(), String> {
             || subject_lower.contains("re: diverg");
 
         if is_correcao {
-            processar_correcao_divergencia(
+            match reserve_email_processado(
                 &database,
                 msg_id,
-                &subject,
-                &body,
-                &from,
                 transportadora_id,
+                &transportadora_nome,
+                &subject,
+                &from,
+                "correcao_divergencia",
                 &now_iso,
-                status,
             )
-            .await;
+            .await
+            {
+                Ok(true) => {
+                    processar_correcao_divergencia(
+                        &database,
+                        msg_id,
+                        &subject,
+                        &body,
+                        &from,
+                        transportadora_id,
+                        &now_iso,
+                        status,
+                    )
+                    .await;
+                }
+                Ok(false) => {
+                    println!("[EmailWatcher] Email {} já estava reservado por outra instância", msg_id);
+                }
+                Err(e) => {
+                    eprintln!("[EmailWatcher] Erro ao tentar reservar email {}: {}", msg_id, e);
+                }
+            }
             continue;
         }
 
@@ -284,52 +365,72 @@ async fn poll_once(status: &Arc<Mutex<WatcherStatus>>) -> Result<(), String> {
             tipo_email.clone()
         };
 
-        match tipo_real.as_str() {
-            "cotacao" | "orcamento" => {
-                processar_cotacao(
-                    &database,
-                    &gmail,
-                    msg_id,
-                    &subject,
-                    &body,
-                    &from,
-                    transportadora_id,
-                    &transportadora_nome,
-                    &now_iso,
-                    status,
-                )
-                .await;
+        match reserve_email_processado(
+            &database,
+            msg_id,
+            transportadora_id,
+            &transportadora_nome,
+            &subject,
+            &from,
+            tipo_real.as_str(),
+            &now_iso,
+        )
+        .await
+        {
+            Ok(true) => {
+                match tipo_real.as_str() {
+                    "cotacao" | "orcamento" => {
+                        processar_cotacao(
+                            &database,
+                            &gmail,
+                            msg_id,
+                            &subject,
+                            &body,
+                            &from,
+                            transportadora_id,
+                            &transportadora_nome,
+                            &now_iso,
+                            status,
+                        )
+                        .await;
+                    }
+                    "nota" => {
+                        processar_nota(
+                            &database,
+                            &gmail,
+                            msg_id,
+                            &msg,
+                            &subject,
+                            &from,
+                            transportadora_id,
+                            &transportadora_nome,
+                            &now_iso,
+                            status,
+                        )
+                        .await;
+                    }
+                    _ => {
+                        processar_cotacao(
+                            &database,
+                            &gmail,
+                            msg_id,
+                            &subject,
+                            &body,
+                            &from,
+                            transportadora_id,
+                            &transportadora_nome,
+                            &now_iso,
+                            status,
+                        )
+                        .await;
+                    }
+                }
             }
-            "nota" => {
-                processar_nota(
-                    &database,
-                    &gmail,
-                    msg_id,
-                    &msg,
-                    &subject,
-                    &from,
-                    transportadora_id,
-                    &transportadora_nome,
-                    &now_iso,
-                    status,
-                )
-                .await;
+            Ok(false) => {
+                println!("[EmailWatcher] Email {} já estava reservado por outra instância", msg_id);
             }
-            _ => {
-                // Tipo "ambos" sem classificação clara → trata como cotação
-                processar_cotacao(
-                    &database,
-                    &gmail,
-                    msg_id,
-                    &subject,
-                    &body,
-                    &from,
-                    transportadora_id,
-                    &transportadora_nome,
-                    &now_iso,
-                    status,
-                )
-                .await;
+            Err(e) => {
+                eprintln!("[EmailWatcher] Erro ao tentar reservar email {}: {}", msg_id, e);
             }
         }
 
@@ -405,7 +506,7 @@ async fn processar_correcao_divergencia(
                 remetente: Some(from.to_string()),
                 prazo_extraido: None,
             };
-            let _ = database.emails_processados.insert_one(email_doc).await;
+            let _ = atualizar_email_processado(database, msg_id, &email_doc).await;
             incrementar_contador(database, status).await;
             return;
         }
@@ -455,7 +556,7 @@ async fn processar_correcao_divergencia(
         remetente: Some(from.to_string()),
         prazo_extraido: None,
     };
-    let _ = database.emails_processados.insert_one(email_doc).await;
+    let _ = atualizar_email_processado(database, msg_id, &email_doc).await;
     incrementar_contador(database, status).await;
 }
 
@@ -495,7 +596,7 @@ async fn processar_cotacao(
             remetente: Some(from.to_string()),
             prazo_extraido: None,
         };
-        let _ = database.emails_processados.insert_one(email_doc).await;
+        let _ = atualizar_email_processado(database, msg_id, &email_doc).await;
         incrementar_contador(database, status).await;
         return;
     }
@@ -609,7 +710,7 @@ async fn processar_cotacao(
         prazo_extraido,
     };
 
-    let _ = database.emails_processados.insert_one(email_doc).await;
+    let _ = atualizar_email_processado(database, msg_id, &email_doc).await;
     incrementar_contador(database, status).await;
 }
 
@@ -638,6 +739,7 @@ async fn processar_nota(
     let mut valor_extraido: Option<i32> = None;
     let mut _cnpj_emitente: Option<String> = None;
     let mut descricao_carga: Option<String> = None;
+    let mut cte_peso_real: Option<f64> = None;
 
     // 2. Tentar parse procedural de cada XML
     for (att_id, filename) in &xml_attachments {
@@ -654,6 +756,9 @@ async fn processar_nota(
                 valor_extraido = Some(info.valor_frete_centavos);
                 _cnpj_emitente = Some(info.cnpj_emitente);
                 descricao_carga = Some(info.descricao_carga);
+                if info.peso_real > 0.0 {
+                    cte_peso_real = Some(info.peso_real);
+                }
                 break; // Primeiro XML com sucesso é suficiente
             }
             Err(e) => {
@@ -692,7 +797,7 @@ async fn processar_nota(
     let mut erro_msg: Option<String> = None;
 
     if let Some(valor) = valor_extraido {
-        match aplicar_valor_frete_pago(database, transportadora_id, valor, descricao_carga.as_deref()).await {
+        match aplicar_valor_frete_pago(database, transportadora_id, valor, descricao_carga.as_deref(), cte_peso_real).await {
             Ok(Some((oid, desc))) => {
                 orcamento_match = Some(oid);
                 orcamento_desc = Some(desc.clone());
@@ -753,7 +858,7 @@ async fn processar_nota(
         }
     }
 
-    let _ = database.emails_processados.insert_one(email_doc).await;
+    let _ = atualizar_email_processado(database, msg_id, &email_doc).await;
     incrementar_contador(database, status).await;
 }
 
@@ -846,7 +951,9 @@ fn campos_orcamento_para_texto(orc: &db::models::Orcamento) -> String {
         }
     }
     if let Some(peso_total) = orc.peso_total {
-        partes.push(format!("Peso total: {:.3} kg", peso_total));
+        partes.push(format!("Peso: {:.3} kg", peso_total));
+    } else if let Some(peso) = orc.peso {
+        partes.push(format!("Peso: {:.3} kg", peso));
     }
     if let Some(cnpj_pagador) = &orc.cnpj_pagador {
         if !cnpj_pagador.trim().is_empty() {
@@ -1042,6 +1149,7 @@ async fn aplicar_valor_frete_pago(
     transportadora_id: ObjectId,
     valor_centavos: i32,
     descricao_carga: Option<&str>,
+    cte_peso_real: Option<f64>,
 ) -> Result<Option<(ObjectId, String)>, String> {
     // Buscar orçamentos ATIVOS com proposta ganhadora dessa transportadora
     let mut cursor = database
@@ -1120,6 +1228,7 @@ async fn aplicar_valor_frete_pago(
     }
 
     let mut divergencia_detectada = false;
+    let mut motivo_divergencia: Vec<String> = Vec::new();
     let mut proposta_nominal: f64 = 0.0;
 
     for proposta in &orcamento.propostas {
@@ -1130,6 +1239,24 @@ async fn aplicar_valor_frete_pago(
     }
     if proposta_nominal > 0.0 && (proposta_nominal - valor_reais).abs() > f64::EPSILON {
         divergencia_detectada = true;
+        motivo_divergencia.push(format!(
+            "frete pago R$ {:.2} vs proposta R$ {:.2}",
+            valor_reais, proposta_nominal
+        ));
+    }
+
+    // Verificar divergência de peso
+    if let Some(peso_cte) = cte_peso_real {
+        let peso_orc = orcamento.peso;
+        if let Some(peso) = peso_orc {
+            if (peso - peso_cte).abs() >= 1e-6 {
+                divergencia_detectada = true;
+                motivo_divergencia.push(format!(
+                    "peso CT-e {:.3} kg vs orçamento {:.3} kg",
+                    peso_cte, peso
+                ));
+            }
+        }
     }
 
     database
@@ -1144,10 +1271,9 @@ async fn aplicar_valor_frete_pago(
     if divergencia_detectada {
         let title = "Divergência de Nota";
         let body = format!(
-            "Orçamento '{}' - frete pago R$ {:.2} vs proposta R$ {:.2}",
+            "Orçamento '{}' - {}",
             orcamento.descricao,
-            valor_reais,
-            proposta_nominal
+            motivo_divergencia.join(" | ")
         );
 
         let _ = Notification::new()
@@ -1163,21 +1289,28 @@ async fn aplicar_valor_frete_pago(
             orcamento_id,
             orcamento_descricao: orcamento.descricao.clone(),
             mensagem: format!(
-                "Divergência de nota detectada: frete pago R$ {:.2} vs proposta R$ {:.2}",
-                valor_reais,
-                proposta_nominal
+                "Divergência de nota detectada: {}",
+                motivo_divergencia.join(" | ")
             ),
             lida: false,
             criada_em: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
         };
         let _ = database.notificacoes.insert_one(notificacao).await;
 
-        // Marcar orçamento com divergência não tratada
+        // Marcar orçamento com divergência não tratada e salvar os campos
+        let campos_bson: Vec<mongodb::bson::Bson> = motivo_divergencia
+            .iter()
+            .map(|c| mongodb::bson::Bson::String(c.clone()))
+            .collect();
         let _ = database
             .orcamentos
             .update_one(
                 mongodb::bson::doc! { "_id": orcamento_id },
-                mongodb::bson::doc! { "$set": { "divergencia_tratada": false } },
+                mongodb::bson::doc! { "$set": {
+                    "divergencia_tratada": false,
+                    "divergencia_campos": campos_bson,
+                    "divergencia_email_status": "pendente",
+                } },
             )
             .await;
     }

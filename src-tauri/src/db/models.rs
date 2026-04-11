@@ -97,6 +97,9 @@ pub struct Orcamento {
     /// Campos identificados como divergentes
     #[serde(default)]
     pub divergencia_campos: Vec<String>,
+    /// Campos que o usuário aceitou como não-divergência (ignorados em novas análises)
+    #[serde(default)]
+    pub divergencia_campos_aceitos: Vec<String>,
     /// Conteúdo do email de correção recebido da transportadora
     #[serde(default)]
     pub divergencia_email_correcao: Option<String>,

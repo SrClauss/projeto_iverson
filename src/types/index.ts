@@ -64,6 +64,11 @@ export type OrcamentoDetalhe = {
   cnpj_pagador?: string | null;
   cnpj_cpf_destino?: string | null;
   cep_destino?: string | null;
+  logradouro_destino?: string | null;
+  numero_destino?: string | null;
+  bairro_destino?: string | null;
+  cidade_destino?: string | null;
+  uf_destino?: string | null;
   endereco_destino?: string | null;
   nota?: string | null;
   valor_produto?: number | null;
@@ -77,6 +82,7 @@ export type OrcamentoDetalhe = {
   divergencia_tratada: boolean;
   divergencia_email_status?: string | null;
   divergencia_campos?: string[] | null;
+  divergencia_campos_aceitos?: string[] | null;
   divergencia_email_correcao?: string | null;
   divergencia_email_enviado_em?: string | null;
   transportadoras_enviadas: string[];
@@ -137,6 +143,11 @@ export type NovoOrcamentoForm = {
   cnpj_pagador: string;
   cnpj_cpf_destino: string;
   cep_destino: string;
+  logradouro_destino: string;
+  numero_destino: string;
+  bairro_destino: string;
+  cidade_destino: string;
+  uf_destino: string;
   endereco_destino: string;
   nota: string;
   valor_produto: string;
