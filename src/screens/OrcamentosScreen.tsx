@@ -469,9 +469,10 @@ const OrcamentosScreen = (props: OrcamentosScreenProps) => {
                   sx={{ '& .MuiOutlinedInput-root': { borderRadius: 0 }, flex: 1 }}
                 />
                 <TextField
-                  label="Prazo de entrega *"
-                  type="text"
-                  placeholder="Ex.: 5 dias úteis"
+                  label="Prazo de entrega (dias) *"
+                  type="number"
+                  placeholder="Ex.: 5"
+                  inputProps={{ min: 1, step: 1 }}
                   value={novaProposta.prazo_entrega}
                   onChange={(event) =>
                     setNovaProposta((prev) => ({ ...prev, prazo_entrega: event.target.value }))

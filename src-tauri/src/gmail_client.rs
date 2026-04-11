@@ -415,10 +415,10 @@ impl GmailClient {
     fn build_email_html(body_content: &str, logo_cid: &str) -> String {
         format!(
             "<!DOCTYPE html><html><body style=\"margin:0;padding:0;background:#f3f4f6;font-family:Arial,Helvetica,sans-serif;color:#111827;\">\
-            <table align=\"center\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"max-width:640px;margin:0 auto;background:#ffffff;border-radius:12px;overflow:hidden;border:1px solid #e5e7eb;\">\
-              <tr><td style=\"background:#111827;padding:28px 24px;text-align:center;\"><img src=\"cid:{}\" alt=\"Ultimax Monitor de Fretes\" style=\"max-width:100%;height:auto;border:none;\"/><p style=\"margin:16px 0 0;color:#d1d5db;font-size:14px;\">Solução de monitoramento de fretes e divergências</p></td></tr>\
+            <table align=\"center\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"max-width:640px;margin:0 auto;background:#ffffff;border-radius:12px;overflow:hidden;border:1px solid #e5e7eb;box-shadow:0 20px 60px rgba(15,23,42,0.08);\">\
+              <tr><td style=\"background:#f8fafc;padding:28px 24px;text-align:center;box-shadow: inset 0 -1px 0 rgba(15,23,42,0.04);\"><img src=\"cid:{}\" alt=\"Ultimax Shop\" style=\"max-width:100%;height:auto;border:none;\"/><p style=\"margin:16px 0 0;color:#475569;font-size:14px;line-height:1.7;max-width:520px;margin-left:auto;margin-right:auto;\">UltimaX Shop — qualidade e variedade em jogos de mesa e bilhar.</p></td></tr>\
               <tr><td style=\"padding:28px 24px;font-size:15px;line-height:1.7;color:#111827;\">{}</td></tr>\
-              <tr><td style=\"background:#f9fafb;padding:18px 24px;font-size:13px;color:#6b7280;text-align:center;\">Este email foi enviado automaticamente pelo Ultimax Monitor de Fretes.</td></tr>\
+              <tr><td style=\"background:#f9fafb;padding:18px 24px;font-size:13px;color:#6b7280;text-align:center;\">Este email foi enviado automaticamente pela UltimaX Shop.</td></tr>\
             </table></body></html>",
             logo_cid,
             body_content

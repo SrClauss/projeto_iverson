@@ -68,7 +68,7 @@ const App = () => {
   const [savingEdicaoOrcamento, setSavingEdicaoOrcamento] = useState(false);
   const [detalheLoading, setDetalheLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [filterType, setFilterType] = useState<FilterKey>('numero_nota');
+  const [filterType, setFilterType] = useState<FilterKey>('nota');
   const [mostrarInativos, setMostrarInativos] = useState(false);
   const [descricao, setDescricao] = useState('');
   const [valorMin, setValorMin] = useState('');
@@ -93,7 +93,6 @@ const App = () => {
   const [editandoTransportadora, setEditandoTransportadora] = useState(false);
   const [transportadoraEmEdicao, setTransportadoraEmEdicao] = useState<Transportadora | null>(null);
   const [novoOrcamento, setNovoOrcamento] = useState<NovoOrcamentoForm>({
-    numero_nota: '',
     numero_cotacao: '',
     data_criacao: getTodayIso(),
     cnpj_pagador: '',
@@ -416,7 +415,6 @@ const App = () => {
       const detalhe = await invoke<OrcamentoDetalhe>('get_orcamento_detalhe', { orcamentoId });
       setOrcamentoDetalhe(detalhe);
       setNovoOrcamento({
-        numero_nota: detalhe.numero_nota || '',
         numero_cotacao: detalhe.numero_cotacao || '',
         data_criacao: detalhe.data_criacao,
         cnpj_pagador: detalhe.cnpj_pagador || '',
@@ -462,7 +460,6 @@ const App = () => {
     setOrcamentoSelecionadoId(null);
     setOrcamentoDetalhe(null);
     setNovoOrcamento({
-      numero_nota: '',
       numero_cotacao: '',
       data_criacao: getTodayIso(),
       cnpj_pagador: '',
@@ -553,13 +550,13 @@ const App = () => {
     setSuccessMessage(null);
     if (!orcamentoSelecionadoId) { setError('Abra um orçamento existente para enviar e-mails.'); return; }
     if (selectedTransportadoraIds.length === 0) { setError('Selecione ao menos uma transportadora.'); return; }
-    if (!novoOrcamento.numero_nota.trim() && !novoOrcamento.numero_cotacao.trim() || !novoOrcamento.nota.trim() || !novoOrcamento.valor_produto.trim()) {
-      setError('Preencha número de nota/cotação, nota e valor do produto antes de enviar.');
+    if (!novoOrcamento.nota.trim() && !novoOrcamento.numero_cotacao.trim() || !novoOrcamento.valor_produto.trim()) {
+      setError('Preencha nota/cotação, nota e valor do produto antes de enviar.');
       return;
     }
     setSendingOrcamentoEmail(true);
     try {
-      const descricao = `NF:${novoOrcamento.numero_nota.trim()} / COT:${novoOrcamento.numero_cotacao.trim()}`;
+      const descricao = `NF:${novoOrcamento.nota.trim()} / COT:${novoOrcamento.numero_cotacao.trim()}`;
       const response = await invoke<string>('send_orcamento_request_email', {
         orcamentoId: orcamentoSelecionadoId,
         transportadoraIds: selectedTransportadoraIds,
@@ -638,10 +635,10 @@ const App = () => {
 
   const handleSalvarOrcamento = async () => {
     setError(null);
-    const numeroNota = novoOrcamento.numero_nota.trim();
+    const nota = novoOrcamento.nota.trim();
     const numeroCotacao = novoOrcamento.numero_cotacao.trim();
     const dataCriacaoNormalizada = normalizeDateInput(novoOrcamento.data_criacao);
-    if (!numeroNota && !numeroCotacao) { setError('Informe pelo menos o Número de Nota ou o Número de Cotação.'); return; }
+    if (!nota && !numeroCotacao) { setError('Informe pelo menos a Nota ou o Número de Cotação.'); return; }
     if (!novoOrcamento.data_criacao.trim()) { setError('Preencha a data para cadastrar o orçamento.'); return; }
     if (!dataCriacaoNormalizada) { setError('Data inválida. Use dd/mm/aaaa ou aaaa-mm-dd.'); return; }
     const valorProduto = novoOrcamento.valor_produto ? parseCurrency(novoOrcamento.valor_produto) || null : null;
@@ -675,11 +672,10 @@ const App = () => {
     if (volumes.some((vol: any) => vol.peso !== null && Number.isNaN(vol.peso))) { setError('Pelo menos um volume possui peso inválido.'); return; }
     setSavingOrcamento(true);
     try {
-      const descricao = `NF:${numeroNota} / COT:${numeroCotacao}`;
+      const descricao = `NF:${nota} / COT:${numeroCotacao}`;
       const orcamentoId = await invoke<string>('add_orcamento', {
         orcamento: {
           descricao,
-          numero_nota: numeroNota || null,
           numero_cotacao: numeroCotacao || null,
           data_criacao: dataCriacaoNormalizada, cnpj_pagador: cnpjPagador, cnpj_cpf_destino: cnpjCpfDestino,
           cep_destino: novoOrcamento.cep_destino.trim() || null,
@@ -696,7 +692,7 @@ const App = () => {
       });
       setOrcamentoSelecionadoId(orcamentoId);
       setNovoOrcamento({
-        numero_nota: numeroNota, numero_cotacao: numeroCotacao, data_criacao: dataCriacaoNormalizada,
+        numero_cotacao: numeroCotacao, data_criacao: dataCriacaoNormalizada,
         cnpj_pagador: novoOrcamento.cnpj_pagador, cnpj_cpf_destino: novoOrcamento.cnpj_cpf_destino,
         cep_destino: novoOrcamento.cep_destino,
         logradouro_destino: novoOrcamento.logradouro_destino,
@@ -722,10 +718,10 @@ const App = () => {
   const handleSalvarEdicaoOrcamento = async () => {
     if (!orcamentoSelecionadoId) return;
     setError(null);
-    const numeroNota = novoOrcamento.numero_nota.trim();
+    const nota = novoOrcamento.nota.trim();
     const numeroCotacao = novoOrcamento.numero_cotacao.trim();
     const dataCriacaoNormalizada = normalizeDateInput(novoOrcamento.data_criacao);
-    if (!numeroNota && !numeroCotacao) { setError('Informe pelo menos o Número de Nota ou o Número de Cotação.'); return; }
+    if (!nota && !numeroCotacao) { setError('Informe pelo menos a Nota ou o Número de Cotação.'); return; }
     if (!dataCriacaoNormalizada) { setError('Data válida é obrigatória para atualizar o orçamento.'); return; }
     const valorProduto = novoOrcamento.valor_produto ? parseCurrency(novoOrcamento.valor_produto) || null : null;
     const peso = novoOrcamento.peso ? Number(novoOrcamento.peso.replace(',', '.')) : null;
@@ -757,7 +753,6 @@ const App = () => {
       await invoke<string>('update_orcamento_basico', {
         orcamentoId: orcamentoSelecionadoId,
         descricao: null,
-        numeroNota: numeroNota || null,
         numeroCotacao: numeroCotacao || null,
         dataCriacao: dataCriacaoNormalizada,
         cnpj_pagador: novoOrcamento.cnpj_pagador.trim() || null, cnpj_cpf_destino: novoOrcamento.cnpj_cpf_destino.trim() || null,
@@ -785,10 +780,11 @@ const App = () => {
     setError(null);
     const valorProposta = parseCurrency(novaProposta.valor_proposta);
     const dataProposta = normalizeDateInput(novaProposta.data_proposta);
-    const prazoEntrega = novaProposta.prazo_entrega.trim();
+    const prazoEntregaStr = novaProposta.prazo_entrega.trim();
+    const prazoEntrega = Number.parseInt(prazoEntregaStr, 10);
     if (Number.isNaN(valorProposta) || !dataProposta) { setError('Informe valor da proposta e data válidos para cadastrar a proposta.'); return; }
     if (!novaProposta.transportadora_id) { setError('Selecione uma transportadora para cadastrar a proposta.'); return; }
-    if (!prazoEntrega) { setError('Informe o prazo de entrega para cadastrar a proposta.'); return; }
+    if (!prazoEntregaStr || Number.isNaN(prazoEntrega) || prazoEntrega <= 0) { setError('Informe o prazo de entrega em dias para cadastrar a proposta.'); return; }
     setSavingProposta(true);
     try {
       await invoke<string>('add_proposta_manual', {
@@ -863,10 +859,10 @@ const App = () => {
       let value = '';
       let filtroDescricao = '';
       switch (filterType) {
-        case 'numero_nota':
-          if (!descricao.trim()) throw new Error('Informe o número de nota para filtrar.');
+        case 'nota':
+          if (!descricao.trim()) throw new Error('Informe o número da nota para filtrar.');
           value = descricao.trim();
-          filtroDescricao = `Número de Nota: ${value}`;
+          filtroDescricao = `Nota: ${value}`;
           break;
         case 'descricao':
           if (!descricao.trim()) throw new Error('Informe uma descrição para filtrar.');
@@ -997,11 +993,11 @@ const App = () => {
         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2, px: 2, flexWrap: 'wrap', gap: 1 }}>
           <Box>
             <Typography variant="h4" sx={{ fontWeight: 900, color: '#0f172a', display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
-              {view === 'dashboard' ? 'Operações' : view === 'transportadoras' ? 'Transportadoras' : view === 'relatorios' ? 'Relatórios' : view === 'divergencia' ? 'Tratar Divergência' : 'Cadastro de Orçamentos'}{' '}
+              {view === 'dashboard' ? 'Operações' : view === 'transportadoras' ? 'Transportadoras' : view === 'relatorios' ? 'Ajuda' : view === 'divergencia' ? 'Tratar Divergência' : 'Cadastro de Orçamentos'}{' '}
               <Chip label="Live" size="small" sx={{ height: 28, borderRadius: '999px', px: 0.75, fontSize: '0.72rem', fontWeight: 800, letterSpacing: '0.04em', color: '#166534', background: 'linear-gradient(180deg, #dcfce7 0%, #bbf7d0 100%)', border: '1px solid rgba(34, 197, 94, 0.35)', boxShadow: '0 6px 16px rgba(34, 197, 94, 0.18)', '& .MuiChip-label': { px: 1 }, '&::before': { content: '""', display: 'block', width: 8, height: 8, borderRadius: '50%', backgroundColor: '#22c55e', boxShadow: '0 0 0 4px rgba(34, 197, 94, 0.18)', marginLeft: '8px' } }} />
             </Typography>
             <Typography variant="body2" color="text.secondary">
-              {view === 'dashboard' ? 'Gestão de transportadoras e orçamentos ativos' : view === 'transportadoras' ? 'Gestão e cadastro de transportadoras' : view === 'relatorios' ? 'Em construção' : view === 'divergencia' ? 'Análise e resolução de divergências de nota' : 'Cadastro de novos orçamentos no sistema'}
+              {view === 'dashboard' ? 'Gestão de transportadoras e orçamentos ativos' : view === 'transportadoras' ? 'Gestão e cadastro de transportadoras' : view === 'relatorios' ? 'Ajuda rápida sobre o sistema' : view === 'divergencia' ? 'Análise e resolução de divergências de nota' : 'Cadastro de novos orçamentos no sistema'}
             </Typography>
           </Box>
           <Stack direction="row" spacing={1} alignItems="center">

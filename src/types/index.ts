@@ -1,4 +1,4 @@
-export type FilterKey = 'numero_nota' | 'descricao' | 'cep_destino' | 'valor_produto' | 'peso' | 'data_criacao' | 'transportadora';
+export type FilterKey = 'nota' | 'descricao' | 'cep_destino' | 'valor_produto' | 'peso' | 'data_criacao' | 'transportadora';
 export type AppView = 'dashboard' | 'transportadoras' | 'orcamentos' | 'relatorios' | 'divergencia';
 
 export type DashboardStats = {
@@ -48,7 +48,7 @@ export type PropostaDetalhe = {
   id: string;
   valor_proposta: number;
   valor_frete_pago?: number | null;
-  prazo_entrega?: string | null;
+  prazo_entrega?: number | null;
   transportadora_id?: string | null;
   transportadora_nome?: string | null;
   data_proposta: string;
@@ -57,7 +57,6 @@ export type PropostaDetalhe = {
 export type OrcamentoDetalhe = {
   id: string;
   descricao: string;
-  numero_nota?: string | null;
   numero_cotacao?: string | null;
   data_criacao: string;
   ativo: boolean;
@@ -76,7 +75,6 @@ export type OrcamentoDetalhe = {
   volumes?: { comprimento: number; largura: number; altura: number; peso?: number | null }[] | null;
   dimensoes?: { comprimento: number; largura: number; altura: number } | null;
   peso?: number | null;
-  peso_total?: number | null;
   proposta_ganhadora_id?: string | null;
   propostas: PropostaDetalhe[];
   divergencia_tratada: boolean;
@@ -137,7 +135,6 @@ export type VolumeForm = {
 };
 
 export type NovoOrcamentoForm = {
-  numero_nota: string;
   numero_cotacao: string;
   data_criacao: string;
   cnpj_pagador: string;

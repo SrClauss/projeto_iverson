@@ -1,4 +1,5 @@
-use serde::{Deserialize, Serialize};
+use serde::{de, Deserialize, Deserializer, Serialize};
+use serde_json::Value;
 use mongodb::bson::oid::ObjectId;
 
 fn default_true() -> bool {
@@ -42,8 +43,6 @@ pub struct Orcamento {
     pub id: Option<ObjectId>,
     pub descricao: String,
     #[serde(default)]
-    pub numero_nota: Option<String>,
-    #[serde(default)]
     pub numero_cotacao: Option<String>,
     pub data_criacao: String,
     #[serde(default)]
@@ -76,8 +75,6 @@ pub struct Orcamento {
     pub dimensoes: Option<Dimensoes>,
     #[serde(default)]
     pub peso: Option<f64>,
-    #[serde(default)]
-    pub peso_total: Option<f64>,
     #[serde(default)]
     pub transportadoras_enviadas: Vec<String>,
     #[serde(default)]
@@ -121,8 +118,7 @@ impl Orcamento {
 
         let prazo_valido = proposta
             .prazo_entrega
-            .as_ref()
-            .map(|value| !value.trim().is_empty())
+            .map(|value| value > 0)
             .unwrap_or(false);
 
         if !prazo_valido {
@@ -143,13 +139,49 @@ impl Orcamento {
     }
 }
 
+fn deserialize_option_i32_from_string<'de, D>(deserializer: D) -> Result<Option<i32>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let opt = Option::<serde_json::Value>::deserialize(deserializer)
+        .map_err(de::Error::custom)?;
+
+    match opt {
+        None => Ok(None),
+        Some(Value::Number(num)) => num
+            .as_i64()
+            .and_then(|v| i32::try_from(v).ok())
+            .ok_or_else(|| de::Error::custom("invalid prazo_entrega integer"))
+            .map(Some),
+        Some(Value::String(s)) => {
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                Ok(None)
+            } else {
+                trimmed
+                    .split(|c: char| !c.is_ascii_digit())
+                    .find(|part| !part.is_empty())
+                    .ok_or_else(|| de::Error::custom("invalid prazo_entrega string"))
+                    .and_then(|digits| {
+                        digits
+                            .parse::<i32>()
+                            .map(Some)
+                            .map_err(|_| de::Error::custom("invalid prazo_entrega string"))
+                    })
+            }
+        }
+        Some(_) => Err(de::Error::custom("invalid prazo_entrega type")),
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Proposta {
     #[serde(default)]
     pub id: Option<String>,
     pub valor_proposta: f64,
     pub valor_frete_pago: Option<f64>,
-    pub prazo_entrega: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_option_i32_from_string")]
+    pub prazo_entrega: Option<i32>,
     pub transportadora_id: Option<ObjectId>,
     pub data_proposta: String,
     /// "manual" ou "email" — como esta proposta foi criada

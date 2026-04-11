@@ -274,7 +274,7 @@ const DivergenciasScreen = (props: DivergenciasScreenProps) => {
           ) : orcamentoDetalhe ? (
             <Stack spacing={1.5}>
               {[
-                { label: 'Nº Nota', value: orcamentoDetalhe.numero_nota ?? orcamentoDetalhe.nota ?? '-' },
+                { label: 'Nº Nota', value: orcamentoDetalhe.nota ?? '-' },
                 { label: 'Nº Cotação', value: orcamentoDetalhe.numero_cotacao ?? '-' },
                 { label: 'Data de Criação', value: orcamentoDetalhe.data_criacao },
                 { label: 'CEP de destino', value: orcamentoDetalhe.cep_destino ?? '-' },

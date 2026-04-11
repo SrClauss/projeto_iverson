@@ -950,9 +950,7 @@ fn campos_orcamento_para_texto(orc: &db::models::Orcamento) -> String {
             partes.push(volumes_str);
         }
     }
-    if let Some(peso_total) = orc.peso_total {
-        partes.push(format!("Peso: {:.3} kg", peso_total));
-    } else if let Some(peso) = orc.peso {
+    if let Some(peso) = orc.peso {
         partes.push(format!("Peso: {:.3} kg", peso));
     }
     if let Some(cnpj_pagador) = &orc.cnpj_pagador {
@@ -1118,15 +1116,20 @@ async fn criar_proposta_automatica(
 
     let hoje = chrono::Utc::now().format("%Y-%m-%d").to_string();
 
-    let prazo_str = prazo
-        .map(|p| p.to_string())
-        .unwrap_or_else(|| "Via email - a confirmar".to_string());
+    let prazo_entrega = prazo
+        .and_then(|value| {
+            value
+                .trim()
+                .split(|c: char| !c.is_ascii_digit())
+                .find(|part| !part.is_empty())
+                .and_then(|digits| digits.parse::<i32>().ok())
+        });
 
     let proposta = db::models::Proposta {
         id: Some(ObjectId::new().to_hex()),
         valor_proposta: valor_centavos as f64 / 100.0,
         valor_frete_pago: None,
-        prazo_entrega: Some(prazo_str),
+        prazo_entrega,
         transportadora_id: Some(transportadora_id),
         data_proposta: hoje,
         origem: "email".to_string(),

@@ -35,6 +35,7 @@ dirs = "6"
 urlencoding = "2"
 once_cell = "1"
 open = "5"
+unicode-normalization = "0.1"
 
 
 

@@ -9,7 +9,7 @@ import {
   Dashboard as DashboardIcon,
   Add,
   LocalShipping,
-  BarChart,
+  HelpOutline,
 } from '@mui/icons-material';
 import { glassPanel } from '../styles/glass';
 import type { AppView } from '../types';
@@ -79,7 +79,7 @@ const Sidebar = ({ view, setView, handleNovoOrcamento }: SidebarProps) => {
               <LocalShipping />
             </IconButton>
           </Tooltip>
-          <Tooltip title="Relatórios" arrow>
+          <Tooltip title="Ajuda" arrow>
             <IconButton
               onClick={() => setView('relatorios')}
               sx={{
@@ -87,7 +87,7 @@ const Sidebar = ({ view, setView, handleNovoOrcamento }: SidebarProps) => {
                 bgcolor: view === 'relatorios' ? 'rgba(99, 102, 241, 0.1)' : 'transparent',
               }}
             >
-              <BarChart />
+              <HelpOutline />
             </IconButton>
           </Tooltip>
         </Stack>
@@ -146,7 +146,7 @@ const Sidebar = ({ view, setView, handleNovoOrcamento }: SidebarProps) => {
               <LocalShipping />
             </IconButton>
           </Tooltip>
-          <Tooltip title="Relatórios" placement="right" arrow>
+          <Tooltip title="Ajuda" placement="right" arrow>
             <IconButton
               onClick={() => setView('relatorios')}
               sx={{
@@ -154,7 +154,7 @@ const Sidebar = ({ view, setView, handleNovoOrcamento }: SidebarProps) => {
                 bgcolor: view === 'relatorios' ? 'rgba(99, 102, 241, 0.1)' : 'transparent',
               }}
             >
-              <BarChart />
+              <HelpOutline />
             </IconButton>
           </Tooltip>
         </Stack>

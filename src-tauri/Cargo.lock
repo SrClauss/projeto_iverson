@@ -2195,6 +2195,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-opener",
  "tokio",
+ "unicode-normalization",
  "urlencoding",
 ]
 

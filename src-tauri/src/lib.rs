@@ -9,6 +9,8 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Manager, State,
 };
+use unicode_normalization::UnicodeNormalization;
+use unicode_normalization::char::is_combining_mark;
 
 mod cte_parser;
 mod db;
@@ -150,7 +152,7 @@ struct PropostaDetalheItem {
     id: String,
     valor_proposta: f64,
     valor_frete_pago: Option<f64>,
-    prazo_entrega: Option<String>,
+    prazo_entrega: Option<i32>,
     transportadora_id: Option<String>,
     transportadora_nome: Option<String>,
     data_proposta: String,
@@ -160,7 +162,6 @@ struct PropostaDetalheItem {
 struct OrcamentoDetalheItem {
     id: String,
     descricao: String,
-    numero_nota: Option<String>,
     numero_cotacao: Option<String>,
     data_criacao: String,
     ativo: bool,
@@ -179,7 +180,6 @@ struct OrcamentoDetalheItem {
     volumes: Option<Vec<db::models::Volume>>,
     dimensoes: Option<db::models::Dimensoes>,
     peso: Option<f64>,
-    peso_total: Option<f64>,
     transportadoras_enviadas: Vec<String>,
     proposta_ganhadora_id: Option<String>,
     propostas: Vec<PropostaDetalheItem>,
@@ -304,7 +304,6 @@ async fn map_orcamento_to_detalhe(
     Ok(OrcamentoDetalheItem {
         id,
         descricao: orcamento.descricao,
-        numero_nota: orcamento.numero_nota,
         numero_cotacao: orcamento.numero_cotacao,
         data_criacao: orcamento.data_criacao,
         ativo: orcamento.ativo,
@@ -323,7 +322,6 @@ async fn map_orcamento_to_detalhe(
         volumes: orcamento.volumes,
         dimensoes: orcamento.dimensoes,
         peso: orcamento.peso,
-        peso_total: orcamento.peso_total,
         proposta_ganhadora_id: orcamento.proposta_ganhadora_id,
         propostas,
         transportadoras_enviadas: orcamento.transportadoras_enviadas,
@@ -1266,13 +1264,21 @@ async fn add_orcamento(mut orcamento: db::models::Orcamento) -> Result<String, S
     orcamento.ativo = true;
     orcamento.proposta_ganhadora_id = None;
 
-    // Derive descricao from numero_nota and numero_cotacao if provided
-    let nn = orcamento.numero_nota.as_deref().unwrap_or("").trim().to_string();
+    // Derive descricao from nota and numero_cotacao if provided
+    let nota = orcamento.nota.as_deref().unwrap_or("").trim().to_string();
     let nc = orcamento.numero_cotacao.as_deref().unwrap_or("").trim().to_string();
-    if !nn.is_empty() || !nc.is_empty() {
-        orcamento.descricao = format!("NF:{} / COT:{}", nn, nc);
+    if !nota.is_empty() || !nc.is_empty() {
+        orcamento.descricao = format!("NF:{} / COT:{}", nota, nc);
     } else if orcamento.descricao.trim().is_empty() {
-        return Err("Informe pelo menos o Número de Nota ou Número de Cotação.".to_string());
+        return Err("Informe pelo menos a Nota ou Número de Cotação.".to_string());
+    }
+
+    if orcamento.qtd_volumes.is_none() {
+        if let Some(volumes) = &orcamento.volumes {
+            if !volumes.is_empty() {
+                orcamento.qtd_volumes = Some(volumes.len() as u32);
+            }
+        }
     }
 
     let insert_result = database
@@ -1420,7 +1426,6 @@ async fn get_orcamento_detalhe(orcamento_id: String) -> Result<OrcamentoDetalheI
 async fn update_orcamento_basico(
     orcamento_id: String,
     descricao: Option<String>,
-    numero_nota: Option<String>,
     numero_cotacao: Option<String>,
     data_criacao: String,
     cnpj_pagador: Option<String>,
@@ -1438,7 +1443,6 @@ async fn update_orcamento_basico(
     volumes: Option<Vec<db::models::Dimensoes>>,
     dimensoes: Option<db::models::Dimensoes>,
     peso: Option<f64>,
-    peso_total: Option<f64>,
 ) -> Result<String, String> {
     let database = db::get_database().await?;
     let orcamento_oid = mongodb::bson::oid::ObjectId::parse_str(&orcamento_id)
@@ -1449,8 +1453,8 @@ async fn update_orcamento_basico(
         return Err("Data de criação é obrigatória".to_string());
     }
 
-    // Derive descricao from numero_nota/numero_cotacao if provided
-    let nn = numero_nota.as_deref().unwrap_or("").trim().to_string();
+    // Derive descricao from nota/numero_cotacao if provided
+    let nn = nota.as_deref().unwrap_or("").trim().to_string();
     let nc = numero_cotacao.as_deref().unwrap_or("").trim().to_string();
     let descricao_final = if !nn.is_empty() || !nc.is_empty() {
         format!("NF:{} / COT:{}", nn, nc)
@@ -1464,7 +1468,6 @@ async fn update_orcamento_basico(
 
     let mut set_doc = mongodb::bson::Document::new();
     set_doc.insert("descricao", descricao_final.as_str());
-    set_doc.insert("numero_nota", numero_nota.as_deref());
     set_doc.insert("numero_cotacao", numero_cotacao.as_deref());
     set_doc.insert("data_criacao", data_criacao);
     set_doc.insert("cnpj_pagador", cnpj_pagador);
@@ -1478,14 +1481,18 @@ async fn update_orcamento_basico(
     set_doc.insert("endereco_destino", endereco_destino);
     set_doc.insert("nota", nota);
     set_doc.insert("valor_produto", valor_produto);
-    set_doc.insert("qtd_volumes", qtd_volumes);
-    set_doc.insert("peso", peso);
-    set_doc.insert("peso_total", peso_total);
-    if let Some(qtd) = qtd_volumes {
-        set_doc.insert("qtd_volumes", qtd);
+    let mut final_qtd_volumes = qtd_volumes;
+    if final_qtd_volumes.is_none() {
+        if let Some(vols) = &volumes {
+            if !vols.is_empty() {
+                final_qtd_volumes = Some(vols.len() as u32);
+            }
+        }
     }
-    if let Some(total) = peso_total {
-        set_doc.insert("peso_total", total);
+    set_doc.insert("qtd_volumes", final_qtd_volumes);
+    set_doc.insert("peso", peso);
+    if let Some(qtd) = final_qtd_volumes {
+        set_doc.insert("qtd_volumes", qtd);
     }
     if let Some(vols) = volumes.clone() {
         let bson_vols: Vec<mongodb::bson::Bson> = vols
@@ -1533,7 +1540,7 @@ async fn add_proposta_manual(
     valor_proposta: f64,
     transportadora_id: String,
     data_proposta: String,
-    prazo_entrega: String,
+    prazo_entrega: i32,
 ) -> Result<String, String> {
     let database = db::get_database().await?;
     let orcamento_oid = mongodb::bson::oid::ObjectId::parse_str(&orcamento_id)
@@ -1553,10 +1560,8 @@ async fn add_proposta_manual(
     let transportadora_oid = mongodb::bson::oid::ObjectId::parse_str(&transportadora_id)
         .map_err(|e| format!("ID de transportadora inválido: {}", e))?;
 
-    let prazo_entrega = prazo_entrega.trim().to_string();
-
-    if prazo_entrega.is_empty() {
-        return Err("Prazo de entrega é obrigatório".to_string());
+    if prazo_entrega <= 0 {
+        return Err("Prazo de entrega deve ser um número de dias válido".to_string());
     }
 
     let nova_proposta = db::models::Proposta {
@@ -2064,10 +2069,10 @@ async fn filter_orcamentos_by(filter: String, value: String) -> Result<Vec<Orcam
     };
 
     match filter.as_str(){
-         "numero_nota" => {
+         "nota" => {
             let mut cursor = database
                 .orcamentos
-                .find(mongodb::bson::doc! { "numero_nota": &value })
+                .find(mongodb::bson::doc! { "nota": &value })
                 .await
                 .map_err(|e| format!("Erro ao buscar orçamentos: {}", e))?;
 
@@ -2563,11 +2568,22 @@ async fn associar_email_a_orcamento(
     if let Some(valor) = email.valor_extraido {
         let mut orc = orcamento.clone();
         let hoje = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let prazo_entrega = email
+            .prazo_extraido
+            .as_deref()
+            .and_then(|value| {
+                value
+                    .trim()
+                    .split(|c: char| !c.is_ascii_digit())
+                    .find(|part| !part.is_empty())
+                    .and_then(|digits| digits.parse::<i32>().ok())
+            });
+
         let proposta = db::models::Proposta {
             id: Some(mongodb::bson::oid::ObjectId::new().to_hex()),
             valor_proposta: valor as f64 / 100.0,
             valor_frete_pago: None,
-            prazo_entrega: email.prazo_extraido.clone().or(Some("Via email".to_string())),
+            prazo_entrega,
             transportadora_id: Some(email.transportadora_id),
             data_proposta: hoje,
             origem: "email".to_string(),
@@ -2743,6 +2759,16 @@ fn calcular_volume_orcamento_m3(orcamento: &db::models::Orcamento) -> f64 {
     }
 }
 
+fn normalize_text(value: &str) -> String {
+    value.nfkd()
+        .filter(|c| !is_combining_mark(*c))
+        .collect::<String>()
+        .to_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Compares a CT-e XML against an orcamento, returning field-by-field comparison.
 #[tauri::command]
 async fn comparar_cte_xml(orcamento_id: String, xml_base64: String) -> Result<serde_json::Value, String> {
@@ -2862,10 +2888,10 @@ async fn comparar_cte_xml(orcamento_id: String, xml_base64: String) -> Result<se
     }));
 
     // Cidade destino
-    let cidade_orc = orcamento.cidade_destino.as_deref().unwrap_or(orcamento.endereco_destino.as_deref().unwrap_or("")).to_lowercase();
-    let cidade_xml_lower = cte.cidade_destino.to_lowercase();
-    let div = !cidade_xml_lower.is_empty() && !cidade_orc.is_empty()
-        && !cidade_orc.contains(&cidade_xml_lower);
+    let cidade_orc = normalize_text(orcamento.cidade_destino.as_deref().unwrap_or(orcamento.endereco_destino.as_deref().unwrap_or("")));
+    let cidade_xml_normalized = normalize_text(&cte.cidade_destino);
+    let div = !cidade_xml_normalized.is_empty() && !cidade_orc.is_empty()
+        && !cidade_orc.contains(&cidade_xml_normalized);
     if div { tem_divergencia = true; }
     campos.push(serde_json::json!({
         "campo": "Cidade Destino",
@@ -2919,19 +2945,15 @@ async fn comparar_cte_xml(orcamento_id: String, xml_base64: String) -> Result<se
     }));
 
     // Peso
-    let peso_orc = orcamento.peso_total.or(orcamento.peso);
+    let peso_orc = orcamento.peso;
     let peso_orc_val = peso_orc.unwrap_or(0.0);
     let mut div = false;
     if peso_orc.is_some() && cte.peso_real > 0.0 {
-        let total_match = orcamento
-            .peso_total
-            .map(|v| (v - cte.peso_real).abs() < 1e-6)
-            .unwrap_or(false);
         let peso_match = orcamento
             .peso
             .map(|v| (v - cte.peso_real).abs() < 1e-6)
             .unwrap_or(false);
-        div = !total_match && !peso_match;
+        div = !peso_match;
     }
     if div { tem_divergencia = true; }
     campos.push(serde_json::json!({
@@ -2964,8 +2986,7 @@ async fn comparar_cte_xml(orcamento_id: String, xml_base64: String) -> Result<se
     }));
 
     // Número de Nota vs chave NF-e
-    let nota_orc = orcamento.numero_nota.as_deref()
-        .or(orcamento.nota.as_deref())
+    let nota_orc = orcamento.nota.as_deref()
         .unwrap_or("").trim().to_string();
     let nf_numero_xml = extrair_numero_nf_da_chave(&cte.chave_nfe);
     let div = !nota_orc.is_empty() && !nf_numero_xml.is_empty()
@@ -3094,15 +3115,14 @@ async fn enviar_email_divergencia(
         return Err("Transportadora não possui email de nota cadastrado".to_string());
     }
 
-    let numero_nota = orcamento.numero_nota.as_deref()
-        .or(orcamento.nota.as_deref()).unwrap_or("");
+    let nota = orcamento.nota.as_deref().unwrap_or("");
     let numero_cotacao = orcamento.numero_cotacao.as_deref().unwrap_or("");
     let campos_str = campos_divergentes.iter()
         .map(|c| format!("<li>{}</li>", c))
         .collect::<Vec<_>>()
         .join("\n");
 
-    let subject = format!("Divergência detectada - NF:{} COT:{}", numero_nota, numero_cotacao);
+    let subject = format!("Divergência detectada - NF:{} COT:{}", nota, numero_cotacao);
     let body = format!(
         "<p>Prezada {},</p>\n\n\
         <p>Identificamos divergências no frete referente ao orçamento <strong>{}</strong>.</p>\n\n\
