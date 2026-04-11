@@ -624,7 +624,7 @@ const App = () => {
     setError(null);
     setSavingTransportadora(true);
     try {
-      await invoke<string>('delete_transportadora', { transportadora_id: transportadora.id });
+      await invoke<string>('delete_transportadora', { transportadoraId: transportadora.id });
       await loadDashboard();
     } catch (err) {
       setError(String(err));
