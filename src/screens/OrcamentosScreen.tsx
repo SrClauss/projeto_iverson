@@ -25,6 +25,7 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
+  Alert,
 } from '@mui/material';
 import {
   Email,
@@ -59,6 +60,7 @@ interface OrcamentosScreenProps {
   forceSendTransportadoraIds: string[];
   cepError: string | null;
   volumesAgregados: VolumesAgregados;
+  modalError: string | null;
   setNovoOrcamento: React.Dispatch<React.SetStateAction<NovoOrcamentoForm>>;
   setNovaProposta: React.Dispatch<React.SetStateAction<NovaPropostaForm>>;
   setShowEnviarOrcamentoModal: (v: boolean) => void;
@@ -94,6 +96,7 @@ const OrcamentosScreen = (props: OrcamentosScreenProps) => {
     forceSendTransportadoraIds,
     cepError,
     volumesAgregados,
+    modalError,
     setNovoOrcamento,
     setNovaProposta,
     setShowEnviarOrcamentoModal,
@@ -607,6 +610,9 @@ const OrcamentosScreen = (props: OrcamentosScreenProps) => {
       >
         <DialogTitle>Selecionar transportadoras para envio</DialogTitle>
         <DialogContent>
+          {modalError && (
+            <Alert severity="error" sx={{ mb: 2 }}>{modalError}</Alert>
+          )}
           <Typography variant="body2" sx={{ mb: 2 }}>
             Selecione as transportadoras que devem receber o pedido de orçamento.
             Itens já enviados antes estão desabilitados, salvo se você ativar o envio forçado.

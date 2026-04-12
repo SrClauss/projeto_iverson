@@ -68,6 +68,7 @@ const App = () => {
   const [savingEdicaoOrcamento, setSavingEdicaoOrcamento] = useState(false);
   const [detalheLoading, setDetalheLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [modalError, setModalError] = useState<string | null>(null);
   const [filterType, setFilterType] = useState<FilterKey>('nota');
   const [mostrarInativos, setMostrarInativos] = useState(false);
   const [descricao, setDescricao] = useState('');
@@ -546,12 +547,12 @@ const App = () => {
   };
 
   const handleEnviarEmailOrcamento = async () => {
-    setError(null);
+    setModalError(null);
     setSuccessMessage(null);
-    if (!orcamentoSelecionadoId) { setError('Abra um orçamento existente para enviar e-mails.'); return; }
-    if (selectedTransportadoraIds.length === 0) { setError('Selecione ao menos uma transportadora.'); return; }
-    if (!novoOrcamento.nota.trim() && !novoOrcamento.numero_cotacao.trim() || !novoOrcamento.valor_produto.trim()) {
-      setError('Preencha nota/cotação, nota e valor do produto antes de enviar.');
+    if (!orcamentoSelecionadoId) { setModalError('Abra um orçamento existente para enviar e-mails.'); return; }
+    if (selectedTransportadoraIds.length === 0) { setModalError('Selecione ao menos uma transportadora.'); return; }
+    if ((!novoOrcamento.nota.trim() && !novoOrcamento.numero_cotacao.trim()) || !novoOrcamento.valor_produto.trim()) {
+      setModalError('Preencha nota/cotação e valor do produto antes de enviar.');
       return;
     }
     setSendingOrcamentoEmail(true);
@@ -570,9 +571,10 @@ const App = () => {
       });
       setSuccessMessage(response);
       setShowEnviarOrcamentoModal(false);
+      setModalError(null);
       await loadOrcamentoDetalhe(orcamentoSelecionadoId);
     } catch (err) {
-      setError(String(err));
+      setModalError(String(err));
     } finally {
       setSendingOrcamentoEmail(false);
     }
@@ -1166,8 +1168,9 @@ const App = () => {
             selectedTransportadoraIds={selectedTransportadoraIds}
             forceSendTransportadoraIds={forceSendTransportadoraIds}
             cepError={cepError} volumesAgregados={volumesAgregados}
+            modalError={modalError}
             setNovoOrcamento={setNovoOrcamento} setNovaProposta={setNovaProposta}
-            setShowEnviarOrcamentoModal={setShowEnviarOrcamentoModal}
+            setShowEnviarOrcamentoModal={(v) => { setShowEnviarOrcamentoModal(v); if (!v) setModalError(null); }}
             handleSalvarOrcamento={handleSalvarOrcamento}
             handleSalvarEdicaoOrcamento={handleSalvarEdicaoOrcamento}
             handleAdicionarPropostaManual={handleAdicionarPropostaManual}
