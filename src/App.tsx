@@ -551,8 +551,8 @@ const App = () => {
     setSuccessMessage(null);
     if (!orcamentoSelecionadoId) { setModalError('Abra um orçamento existente para enviar e-mails.'); return; }
     if (selectedTransportadoraIds.length === 0) { setModalError('Selecione ao menos uma transportadora.'); return; }
-    if (!novoOrcamento.nota.trim() && !novoOrcamento.numero_cotacao.trim() || !novoOrcamento.valor_produto.trim()) {
-      setModalError('Preencha nota/cotação, nota e valor do produto antes de enviar.');
+    if ((!novoOrcamento.nota.trim() && !novoOrcamento.numero_cotacao.trim()) || !novoOrcamento.valor_produto.trim()) {
+      setModalError('Preencha nota/cotação e valor do produto antes de enviar.');
       return;
     }
     setSendingOrcamentoEmail(true);
