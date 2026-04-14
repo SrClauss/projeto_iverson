@@ -65,6 +65,7 @@ export type OrcamentoDetalhe = {
   cep_destino?: string | null;
   logradouro_destino?: string | null;
   numero_destino?: string | null;
+  complemento_destino?: string | null;
   bairro_destino?: string | null;
   cidade_destino?: string | null;
   uf_destino?: string | null;
@@ -142,6 +143,7 @@ export type NovoOrcamentoForm = {
   cep_destino: string;
   logradouro_destino: string;
   numero_destino: string;
+  complemento_destino: string;
   bairro_destino: string;
   cidade_destino: string;
   uf_destino: string;

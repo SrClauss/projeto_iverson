@@ -56,6 +56,8 @@ pub struct Orcamento {
     #[serde(default)]
     pub numero_destino: Option<String>,
     #[serde(default)]
+    pub complemento_destino: Option<String>,
+    #[serde(default)]
     pub bairro_destino: Option<String>,
     #[serde(default)]
     pub cidade_destino: Option<String>,

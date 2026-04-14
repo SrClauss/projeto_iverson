@@ -120,7 +120,7 @@ const OrcamentosScreen = (props: OrcamentosScreenProps) => {
       <Box
         sx={{
           display: 'grid',
-          gridTemplateColumns: { xs: '1fr', xl: '1fr 1.5fr' },
+          gridTemplateColumns: { xs: '1fr', xl: '1.0fr 1fr' },
           gap: 2,
         }}
       >
@@ -141,6 +141,7 @@ const OrcamentosScreen = (props: OrcamentosScreenProps) => {
                 }
                 sx={{ '& .MuiOutlinedInput-root': { borderRadius: 0 } }}
                 fullWidth
+                required
               />
               <TextField
                 label="Data de criação"
@@ -165,6 +166,7 @@ const OrcamentosScreen = (props: OrcamentosScreenProps) => {
               helperText={cepError || 'Somente dígitos: 8 caracteres'}
               sx={{ '& .MuiOutlinedInput-root': { borderRadius: 0 } }}
               fullWidth
+              required
             />
             <Stack direction="row" spacing={2}>
               <TextField
@@ -175,17 +177,8 @@ const OrcamentosScreen = (props: OrcamentosScreenProps) => {
                 }
                 sx={{ '& .MuiOutlinedInput-root': { borderRadius: 0 } }}
                 fullWidth
+                required
               />
-              <TextField
-                label="Número"
-                value={novoOrcamento.numero_destino}
-                onChange={(event) =>
-                  setNovoOrcamento((prev) => ({ ...prev, numero_destino: event.target.value }))
-                }
-                sx={{ maxWidth: 140, '& .MuiOutlinedInput-root': { borderRadius: 0 } }}
-              />
-            </Stack>
-            <Stack direction="row" spacing={2}>
               <TextField
                 label="Bairro"
                 value={novoOrcamento.bairro_destino}
@@ -194,6 +187,17 @@ const OrcamentosScreen = (props: OrcamentosScreenProps) => {
                 }
                 sx={{ '& .MuiOutlinedInput-root': { borderRadius: 0 } }}
                 fullWidth
+                required
+              />
+            </Stack>
+            <Stack direction="row" spacing={2}>
+              <TextField
+                label="Complemento"
+                value={novoOrcamento.complemento_destino}
+                onChange={(event) =>
+                  setNovoOrcamento((prev) => ({ ...prev, complemento_destino: event.target.value }))
+                }
+                sx={{ maxWidth: 180, '& .MuiOutlinedInput-root': { borderRadius: 0 } }}
               />
               <TextField
                 label="Cidade"
@@ -203,15 +207,54 @@ const OrcamentosScreen = (props: OrcamentosScreenProps) => {
                 }
                 sx={{ '& .MuiOutlinedInput-root': { borderRadius: 0 } }}
                 fullWidth
+                required
               />
+              <FormControl sx={{ minWidth: 100, '& .MuiOutlinedInput-root': { borderRadius: 0 } }} required>
+                <InputLabel>UF</InputLabel>
+                <Select
+                  label="UF"
+                  value={novoOrcamento.uf_destino}
+                  onChange={(event) =>
+                    setNovoOrcamento((prev) => ({ ...prev, uf_destino: event.target.value }))
+                  }
+                >
+                  <MenuItem value="AC">AC</MenuItem>
+                  <MenuItem value="AL">AL</MenuItem>
+                  <MenuItem value="AP">AP</MenuItem>
+                  <MenuItem value="AM">AM</MenuItem>
+                  <MenuItem value="BA">BA</MenuItem>
+                  <MenuItem value="CE">CE</MenuItem>
+                  <MenuItem value="DF">DF</MenuItem>
+                  <MenuItem value="ES">ES</MenuItem>
+                  <MenuItem value="GO">GO</MenuItem>
+                  <MenuItem value="MA">MA</MenuItem>
+                  <MenuItem value="MT">MT</MenuItem>
+                  <MenuItem value="MS">MS</MenuItem>
+                  <MenuItem value="MG">MG</MenuItem>
+                  <MenuItem value="PA">PA</MenuItem>
+                  <MenuItem value="PB">PB</MenuItem>
+                  <MenuItem value="PR">PR</MenuItem>
+                  <MenuItem value="PE">PE</MenuItem>
+                  <MenuItem value="PI">PI</MenuItem>
+                  <MenuItem value="RJ">RJ</MenuItem>
+                  <MenuItem value="RN">RN</MenuItem>
+                  <MenuItem value="RS">RS</MenuItem>
+                  <MenuItem value="RO">RO</MenuItem>
+                  <MenuItem value="RR">RR</MenuItem>
+                  <MenuItem value="SC">SC</MenuItem>
+                  <MenuItem value="SP">SP</MenuItem>
+                  <MenuItem value="SE">SE</MenuItem>
+                  <MenuItem value="TO">TO</MenuItem>
+                </Select>
+              </FormControl>
               <TextField
-                label="UF"
-                value={novoOrcamento.uf_destino}
+                label="Número"
+                value={novoOrcamento.numero_destino}
                 onChange={(event) =>
-                  setNovoOrcamento((prev) => ({ ...prev, uf_destino: event.target.value }))
+                  setNovoOrcamento((prev) => ({ ...prev, numero_destino: event.target.value }))
                 }
-                sx={{ '& .MuiOutlinedInput-root': { borderRadius: 0 } }}
-                fullWidth
+                sx={{ maxWidth: 140, '& .MuiOutlinedInput-root': { borderRadius: 0 } }}
+                required
               />
             </Stack>
             <Stack direction="row" spacing={2}>
@@ -224,6 +267,7 @@ const OrcamentosScreen = (props: OrcamentosScreenProps) => {
                 }
                 sx={{ '& .MuiOutlinedInput-root': { borderRadius: 0 } }}
                 fullWidth
+                required
               />
               <TextField
                 label="Valor"
@@ -270,6 +314,7 @@ const OrcamentosScreen = (props: OrcamentosScreenProps) => {
                 }
                 sx={{ '& .MuiOutlinedInput-root': { borderRadius: 0 } }}
                 fullWidth
+                required
               />
             </Stack>
 

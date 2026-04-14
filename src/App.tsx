@@ -101,6 +101,7 @@ const App = () => {
     cep_destino: '',
     logradouro_destino: '',
     numero_destino: '',
+    complemento_destino: '',
     bairro_destino: '',
     cidade_destino: '',
     uf_destino: '',
@@ -117,15 +118,18 @@ const App = () => {
     if (orc.logradouro_destino.trim()) {
       parts.push(orc.logradouro_destino.trim());
     }
+    if (orc.numero_destino.trim()) {
+      parts.push(`nº ${orc.numero_destino.trim()}`);
+    }
+    if (orc.complemento_destino.trim()) {
+      parts.push(orc.complemento_destino.trim());
+    }
     if (orc.bairro_destino.trim()) {
       parts.push(orc.bairro_destino.trim());
     }
     const cidadeUf = [orc.cidade_destino.trim(), orc.uf_destino.trim()].filter(Boolean).join(' - ');
     if (cidadeUf) {
       parts.push(cidadeUf);
-    }
-    if (orc.numero_destino.trim()) {
-      parts.push(`nº ${orc.numero_destino.trim()}`);
     }
     return parts.join(', ');
   };
@@ -423,6 +427,7 @@ const App = () => {
         cep_destino: detalhe.cep_destino || '',
         logradouro_destino: detalhe.logradouro_destino || '',
         numero_destino: detalhe.numero_destino || '',
+        complemento_destino: detalhe.complemento_destino || '',
         bairro_destino: detalhe.bairro_destino || '',
         cidade_destino: detalhe.cidade_destino || '',
         uf_destino: detalhe.uf_destino || '',
@@ -468,6 +473,7 @@ const App = () => {
       cep_destino: '',
       logradouro_destino: '',
       numero_destino: '',
+      complemento_destino: '',
       bairro_destino: '',
       cidade_destino: '',
       uf_destino: '',
@@ -640,9 +646,22 @@ const App = () => {
     const nota = novoOrcamento.nota.trim();
     const numeroCotacao = novoOrcamento.numero_cotacao.trim();
     const dataCriacaoNormalizada = normalizeDateInput(novoOrcamento.data_criacao);
-    if (!nota && !numeroCotacao) { setError('Informe pelo menos a Nota ou o Número de Cotação.'); return; }
+    
+    // Validações de campos obrigatórios básicos
+    if (!nota) { setError('Nota é obrigatória.'); return; }
+    if (!numeroCotacao) { setError('Número de Cotação é obrigatório.'); return; }
+    if (!novoOrcamento.cnpj_cpf_destino.trim()) { setError('CNPJ/CPF de destino é obrigatório.'); return; }
     if (!novoOrcamento.data_criacao.trim()) { setError('Preencha a data para cadastrar o orçamento.'); return; }
     if (!dataCriacaoNormalizada) { setError('Data inválida. Use dd/mm/aaaa ou aaaa-mm-dd.'); return; }
+    
+    // Validações de endereço obrigatórios
+    if (!novoOrcamento.cep_destino.trim()) { setError('CEP de destino é obrigatório.'); return; }
+    if (!novoOrcamento.logradouro_destino.trim()) { setError('Logradouro é obrigatório.'); return; }
+    if (!novoOrcamento.numero_destino.trim()) { setError('Número é obrigatório.'); return; }
+    if (!novoOrcamento.bairro_destino.trim()) { setError('Bairro é obrigatório.'); return; }
+    if (!novoOrcamento.cidade_destino.trim()) { setError('Cidade é obrigatória.'); return; }
+    if (!novoOrcamento.uf_destino.trim()) { setError('UF é obrigatória.'); return; }
+    
     const valorProduto = novoOrcamento.valor_produto ? parseCurrency(novoOrcamento.valor_produto) || null : null;
     const peso = novoOrcamento.peso ? Number(novoOrcamento.peso.replace(',', '.')) : null;
     const volumes = (novoOrcamento.volumes || [])
@@ -683,6 +702,7 @@ const App = () => {
           cep_destino: novoOrcamento.cep_destino.trim() || null,
           logradouro_destino: novoOrcamento.logradouro_destino.trim() || null,
           numero_destino: novoOrcamento.numero_destino.trim() || null,
+          complemento_destino: novoOrcamento.complemento_destino.trim() || null,
           bairro_destino: novoOrcamento.bairro_destino.trim() || null,
           cidade_destino: novoOrcamento.cidade_destino.trim() || null,
           uf_destino: novoOrcamento.uf_destino.trim() || null,
@@ -699,6 +719,7 @@ const App = () => {
         cep_destino: novoOrcamento.cep_destino,
         logradouro_destino: novoOrcamento.logradouro_destino,
         numero_destino: novoOrcamento.numero_destino,
+        complemento_destino: novoOrcamento.complemento_destino,
         bairro_destino: novoOrcamento.bairro_destino,
         cidade_destino: novoOrcamento.cidade_destino,
         uf_destino: novoOrcamento.uf_destino,
@@ -723,8 +744,21 @@ const App = () => {
     const nota = novoOrcamento.nota.trim();
     const numeroCotacao = novoOrcamento.numero_cotacao.trim();
     const dataCriacaoNormalizada = normalizeDateInput(novoOrcamento.data_criacao);
-    if (!nota && !numeroCotacao) { setError('Informe pelo menos a Nota ou o Número de Cotação.'); return; }
+    
+    // Validações de campos obrigatórios básicos
+    if (!nota) { setError('Nota é obrigatória.'); return; }
+    if (!numeroCotacao) { setError('Número de Cotação é obrigatório.'); return; }
+    if (!novoOrcamento.cnpj_cpf_destino.trim()) { setError('CNPJ/CPF de destino é obrigatório.'); return; }
     if (!dataCriacaoNormalizada) { setError('Data válida é obrigatória para atualizar o orçamento.'); return; }
+    
+    // Validações de endereço obrigatórios
+    if (!novoOrcamento.cep_destino.trim()) { setError('CEP de destino é obrigatório.'); return; }
+    if (!novoOrcamento.logradouro_destino.trim()) { setError('Logradouro é obrigatório.'); return; }
+    if (!novoOrcamento.numero_destino.trim()) { setError('Número é obrigatório.'); return; }
+    if (!novoOrcamento.bairro_destino.trim()) { setError('Bairro é obrigatório.'); return; }
+    if (!novoOrcamento.cidade_destino.trim()) { setError('Cidade é obrigatória.'); return; }
+    if (!novoOrcamento.uf_destino.trim()) { setError('UF é obrigatória.'); return; }
+    
     const valorProduto = novoOrcamento.valor_produto ? parseCurrency(novoOrcamento.valor_produto) || null : null;
     const peso = novoOrcamento.peso ? Number(novoOrcamento.peso.replace(',', '.')) : null;
     const volumes = (novoOrcamento.volumes || [])
@@ -735,6 +769,10 @@ const App = () => {
         altura: Number(v.altura.replace(',', '.')),
         peso: v.peso ? Number(v.peso.replace(',', '.')) : null,
       }));
+    
+    // Validação de pelo menos um volume completo
+    if (volumes.length === 0) { setError('É obrigatório informar pelo menos um volume com dimensões completas.'); return; }
+    
     const pesoTotalVolumes = volumes.reduce((acc: number, vol: any) => {
       if (vol.peso !== null && !Number.isNaN(vol.peso)) return acc + vol.peso;
       return acc;
@@ -761,6 +799,7 @@ const App = () => {
         cep_destino: novoOrcamento.cep_destino.trim() || null,
         logradouro_destino: novoOrcamento.logradouro_destino.trim() || null,
         numero_destino: novoOrcamento.numero_destino.trim() || null,
+        complemento_destino: novoOrcamento.complemento_destino.trim() || null,
         bairro_destino: novoOrcamento.bairro_destino.trim() || null,
         cidade_destino: novoOrcamento.cidade_destino.trim() || null,
         uf_destino: novoOrcamento.uf_destino.trim() || null,

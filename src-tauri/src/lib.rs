@@ -170,6 +170,7 @@ struct OrcamentoDetalheItem {
     cep_destino: Option<String>,
     logradouro_destino: Option<String>,
     numero_destino: Option<String>,
+    complemento_destino: Option<String>,
     bairro_destino: Option<String>,
     cidade_destino: Option<String>,
     uf_destino: Option<String>,
@@ -312,6 +313,7 @@ async fn map_orcamento_to_detalhe(
         cep_destino: orcamento.cep_destino,
         logradouro_destino: orcamento.logradouro_destino,
         numero_destino: orcamento.numero_destino,
+        complemento_destino: orcamento.complemento_destino,
         bairro_destino: orcamento.bairro_destino,
         cidade_destino: orcamento.cidade_destino,
         uf_destino: orcamento.uf_destino,
@@ -474,9 +476,13 @@ async fn get_google_access_token_scopes(
 #[tauri::command]
 async fn get_gmail_inbox_status() -> Result<GmailInboxStatus, String> {
     let client_id = std::env::var("GOOGLE_CLIENT_ID")
-        .map_err(|_| "GOOGLE_CLIENT_ID não definido".to_string())?;
+        .ok()
+        .or_else(|| option_env!("GOOGLE_CLIENT_ID").map(|s| s.to_string()))
+        .ok_or_else(|| "GOOGLE_CLIENT_ID não definido".to_string())?;
     let client_secret = std::env::var("GOOGLE_CLIENT_SECRET")
-        .map_err(|_| "GOOGLE_CLIENT_SECRET não definido".to_string())?;
+        .ok()
+        .or_else(|| option_env!("GOOGLE_CLIENT_SECRET").map(|s| s.to_string()))
+        .ok_or_else(|| "GOOGLE_CLIENT_SECRET não definido".to_string())?;
 
     // Usar token do auth state (login) com fallback para env var
     let refresh_token = {
@@ -1433,6 +1439,7 @@ async fn update_orcamento_basico(
     cep_destino: Option<String>,
     logradouro_destino: Option<String>,
     numero_destino: Option<String>,
+    complemento_destino: Option<String>,
     bairro_destino: Option<String>,
     cidade_destino: Option<String>,
     uf_destino: Option<String>,
@@ -1475,6 +1482,7 @@ async fn update_orcamento_basico(
     set_doc.insert("cep_destino", cep_destino);
     set_doc.insert("logradouro_destino", logradouro_destino);
     set_doc.insert("numero_destino", numero_destino);
+    set_doc.insert("complemento_destino", complemento_destino);
     set_doc.insert("bairro_destino", bairro_destino);
     set_doc.insert("cidade_destino", cidade_destino);
     set_doc.insert("uf_destino", uf_destino);
@@ -3130,7 +3138,7 @@ async fn enviar_email_divergencia(
         <ul>\n{}\n</ul>\n\
         <p>Solicito correção ou esclarecimento dos campos acima.</p>\n\
         <p>Por favor, responda este e-mail com as devidas correções.</p>\n\n\
-        <p>Atenciosamente,<br/>Equipe Ultimax - Monitor de Fretes</p>",
+        <p>Atenciosamente,<br/>Equipe Ultimax - Monitor de Fretes v1.0.1</p>",
         transportadora.nome, orcamento.descricao, campos_str
     );
 
@@ -3338,7 +3346,7 @@ pub fn run() {
             let _tray = TrayIconBuilder::with_id("main")
                 .icon(app.default_window_icon().unwrap().clone())
                 .menu(&menu)
-                .tooltip("Ultimax - Monitor de Fretes")
+                .tooltip("Ultimax - Monitor de Fretes v1.0.1")
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show" => {
                         if let Some(win) = app.get_webview_window("main") {
