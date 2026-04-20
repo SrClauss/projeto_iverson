@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   Box,
   Stack,
@@ -33,6 +33,7 @@ import {
   Delete,
   DeleteOutline,
   AttachMoney,
+  Receipt,
 } from '@mui/icons-material';
 import { glassPanel, tableHeaderRowSx, tableHeaderCellSx } from '../styles/glass';
 import { onlyDigits, formatCnpjOrCpf, formatCurrencyInput } from '../utils/formatters';
@@ -72,6 +73,7 @@ interface OrcamentosScreenProps {
   handleEscolherGanhadora: (propostaId: string) => void;
   handleDesfazerGanhadora: () => void;
   handleExcluirProposta: (propostaId: string) => void;
+  handleRegistrarNotaManual: (propostaId: string, valorFretePago: number) => void;
   handleOpenEnviarOrcamentoModal: () => void;
   handleEnviarEmailOrcamento: () => void;
   handleToggleSelectTransportadora: (transportadoraId: string) => void;
@@ -113,7 +115,12 @@ const OrcamentosScreen = (props: OrcamentosScreenProps) => {
     handleToggleSelectTransportadora,
     handleToggleForceSendTransportadora,
     setSelectedTransportadoraIds,
+    handleRegistrarNotaManual,
   } = props;
+
+  const [notaInputPropostaId, setNotaInputPropostaId] = useState<string | null>(null);
+  const [notaInputValor, setNotaInputValor] = useState('');
+  const [savingNota, setSavingNota] = useState(false);
 
   return (
     <>
@@ -613,6 +620,73 @@ const OrcamentosScreen = (props: OrcamentosScreenProps) => {
                                 >
                                   Escolher
                                 </Button>
+                              )}
+
+                              {ganhadora && item.valor_frete_pago == null && (
+                                notaInputPropostaId === item.id ? (
+                                  <Stack direction="row" spacing={0.5} alignItems="center">
+                                    <TextField
+                                      size="small"
+                                      placeholder="Valor frete pago"
+                                      value={notaInputValor}
+                                      onChange={(e) => {
+                                        const formatted = formatCurrencyInput(e.target.value);
+                                        setNotaInputValor(formatted);
+                                      }}
+                                      sx={{ width: 140, '& .MuiOutlinedInput-root': { borderRadius: 0, fontSize: '0.75rem' } }}
+                                      slotProps={{
+                                        input: {
+                                          startAdornment: (
+                                            <InputAdornment position="start">
+                                              <AttachMoney sx={{ fontSize: 14, color: '#64748b' }} />
+                                            </InputAdornment>
+                                          ),
+                                        },
+                                      }}
+                                    />
+                                    <Button
+                                      size="small"
+                                      variant="contained"
+                                      color="success"
+                                      disabled={savingNota || !notaInputValor.trim()}
+                                      sx={{ textTransform: 'none', borderRadius: '8px', minWidth: 60, fontSize: '0.7rem' }}
+                                      onClick={async () => {
+                                        const { parseCurrency } = await import('../utils/formatters');
+                                        const valor = parseCurrency(notaInputValor);
+                                        if (!valor || isNaN(valor) || valor <= 0) return;
+                                        setSavingNota(true);
+                                        try {
+                                          await handleRegistrarNotaManual(item.id, valor);
+                                          setNotaInputPropostaId(null);
+                                          setNotaInputValor('');
+                                        } finally {
+                                          setSavingNota(false);
+                                        }
+                                      }}
+                                    >
+                                      {savingNota ? '...' : 'Salvar'}
+                                    </Button>
+                                    <Button
+                                      size="small"
+                                      variant="text"
+                                      sx={{ textTransform: 'none', fontSize: '0.7rem', minWidth: 48 }}
+                                      onClick={() => { setNotaInputPropostaId(null); setNotaInputValor(''); }}
+                                    >
+                                      Cancelar
+                                    </Button>
+                                  </Stack>
+                                ) : (
+                                  <Tooltip title="Registrar nota manualmente" arrow>
+                                    <IconButton
+                                      size="small"
+                                      color="primary"
+                                      onClick={() => { setNotaInputPropostaId(item.id); setNotaInputValor(''); }}
+                                      sx={{ border: '1px solid rgba(59, 130, 246, 0.4)' }}
+                                    >
+                                      <Receipt fontSize="small" />
+                                    </IconButton>
+                                  </Tooltip>
+                                )
                               )}
 
                               <Tooltip title="Excluir proposta" arrow>

@@ -882,6 +882,20 @@ const App = () => {
     } catch (err) { setError(String(err)); }
   };
 
+  const handleRegistrarNotaManual = async (propostaId: string, valorFretePago: number) => {
+    if (!orcamentoSelecionadoId) return;
+    setError(null);
+    try {
+      await invoke<string>('registrar_nota_manual', {
+        orcamentoId: orcamentoSelecionadoId,
+        propostaId,
+        valorFretePago,
+      });
+      await loadOrcamentoDetalhe(orcamentoSelecionadoId);
+      await loadDashboard();
+    } catch (err) { setError(String(err)); }
+  };
+
   const handleExcluirProposta = async (propostaId: string) => {
     if (!orcamentoSelecionadoId) return;
     if (!window.confirm('Deseja realmente excluir esta proposta?')) return;
@@ -1218,6 +1232,7 @@ const App = () => {
             handleEscolherGanhadora={handleEscolherGanhadora}
             handleDesfazerGanhadora={handleDesfazerGanhadora}
             handleExcluirProposta={handleExcluirProposta}
+            handleRegistrarNotaManual={handleRegistrarNotaManual}
             handleOpenEnviarOrcamentoModal={handleOpenEnviarOrcamentoModal}
             handleEnviarEmailOrcamento={handleEnviarEmailOrcamento}
             handleToggleSelectTransportadora={handleToggleSelectTransportadora}
