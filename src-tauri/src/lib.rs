@@ -1620,6 +1620,20 @@ async fn registrar_nota_manual(
         return Err("Orçamento está desativado".to_string());
     }
 
+    if valor_frete_pago <= 0.0 {
+        return Err("O valor do frete pago deve ser maior que zero".to_string());
+    }
+
+    let ganhadora_id = orcamento
+        .proposta_ganhadora_id
+        .as_deref()
+        .ok_or_else(|| "Este orçamento não possui proposta ganhadora definida".to_string())?
+        .to_string();
+
+    if ganhadora_id != proposta_id {
+        return Err("Somente a proposta ganhadora pode ter o valor da nota registrado".to_string());
+    }
+
     let proposta = orcamento
         .propostas
         .iter_mut()

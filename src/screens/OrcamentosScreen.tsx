@@ -622,7 +622,7 @@ const OrcamentosScreen = (props: OrcamentosScreenProps) => {
                                 </Button>
                               )}
 
-                              {ganhadora && item.valor_frete_pago == null && (
+                              {ganhadora && (item.valor_frete_pago === null || item.valor_frete_pago === undefined) && (
                                 notaInputPropostaId === item.id ? (
                                   <Stack direction="row" spacing={0.5} alignItems="center">
                                     <TextField
