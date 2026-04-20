@@ -1600,6 +1600,62 @@ async fn add_proposta_manual(
 }
 
 #[tauri::command]
+async fn registrar_nota_manual(
+    orcamento_id: String,
+    proposta_id: String,
+    valor_frete_pago: f64,
+) -> Result<String, String> {
+    let database = db::get_database().await?;
+    let orcamento_oid = mongodb::bson::oid::ObjectId::parse_str(&orcamento_id)
+        .map_err(|e| format!("ID de orçamento inválido: {}", e))?;
+
+    let mut orcamento = database
+        .orcamentos
+        .find_one(mongodb::bson::doc! { "_id": orcamento_oid })
+        .await
+        .map_err(|e| format!("Erro ao buscar orçamento: {}", e))?
+        .ok_or_else(|| "Orçamento não encontrado".to_string())?;
+
+    if !orcamento.ativo {
+        return Err("Orçamento está desativado".to_string());
+    }
+
+    if valor_frete_pago <= 0.0 {
+        return Err("O valor do frete pago deve ser maior que zero".to_string());
+    }
+
+    let ganhadora_id = orcamento
+        .proposta_ganhadora_id
+        .as_deref()
+        .ok_or_else(|| "Este orçamento não possui proposta ganhadora definida".to_string())?
+        .to_string();
+
+    if ganhadora_id != proposta_id {
+        return Err("Somente a proposta ganhadora pode ter o valor da nota registrado".to_string());
+    }
+
+    let proposta = orcamento
+        .propostas
+        .iter_mut()
+        .find(|p| p.id.as_deref() == Some(proposta_id.as_str()))
+        .ok_or_else(|| "Proposta não encontrada neste orçamento".to_string())?;
+
+    proposta.valor_frete_pago = Some(valor_frete_pago);
+
+    let update_result = database
+        .orcamentos
+        .replace_one(mongodb::bson::doc! { "_id": orcamento_oid }, &orcamento)
+        .await
+        .map_err(|e| format!("Erro ao atualizar orçamento: {}", e))?;
+
+    if update_result.matched_count == 0 {
+        return Err("Orçamento não encontrado para atualização".to_string());
+    }
+
+    Ok("Nota registrada manualmente com sucesso".to_string())
+}
+
+#[tauri::command]
 async fn desativar_orcamento(orcamento_id: String) -> Result<String, String> {
     let database = db::get_database().await?;
     let orcamento_oid = mongodb::bson::oid::ObjectId::parse_str(&orcamento_id)
@@ -3289,6 +3345,7 @@ pub fn run() {
             add_orcamento,
             add_proposta,
             add_proposta_manual,
+            registrar_nota_manual,
             add_transportadora,
             update_transportadora,
             delete_transportadora,
