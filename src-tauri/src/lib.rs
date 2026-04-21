@@ -3360,6 +3360,13 @@ async fn enviar_email_divergencia(
     Ok(format!("Email de divergência enviado para {}", email_to))
 }
 
+/// Opens the audit logs folder in the system file explorer.
+#[tauri::command]
+fn open_logs_folder() -> Result<(), String> {
+    let dir = audit_log::audit_dir();
+    open::that(&dir).map_err(|e| format!("Erro ao abrir pasta de logs: {}", e))
+}
+
 /// Marks a divergence as finalized (divergencia_tratada = true).
 #[tauri::command]
 async fn finalizar_divergencia(orcamento_id: String) -> Result<String, String> {
@@ -3525,7 +3532,8 @@ pub fn run() {
             enviar_email_divergencia,
             finalizar_divergencia,
             reverter_divergencia,
-            salvar_campos_divergencia
+            salvar_campos_divergencia,
+            open_logs_folder
         ])
         .setup(|app| {
             // Watcher state management
