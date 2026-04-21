@@ -1609,6 +1609,7 @@ async fn update_orcamento_basico(
 
     Ok("Orçamento atualizado com sucesso".to_string())
 }
+#[tauri::command]
 async fn add_proposta_manual(
     orcamento_id: String,
     valor_proposta: f64,
@@ -1818,7 +1819,7 @@ async fn escolher_proposta_ganhadora(
     }
 
     let proposta_ganhadora = proposta_ganhadora.unwrap();
-    orcamento.proposta_ganhadora_id = Some(proposta_id);
+    orcamento.proposta_ganhadora_id = Some(proposta_id.clone());
     // Orçamento permanece ativo — só conclui quando o usuário marcar manualmente
 
     let update_result = database
