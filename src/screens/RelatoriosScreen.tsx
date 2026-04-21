@@ -1,13 +1,20 @@
-import { Box, Typography, List, ListItem, ListItemText, Divider, Tabs, Tab, Button } from '@mui/material';
+import { Box, Typography, List, ListItem, ListItemText, Divider, Tabs, Tab, Button, Snackbar, Alert } from '@mui/material';
 import FolderOpenIcon from '@mui/icons-material/FolderOpen';
 import { invoke } from '@tauri-apps/api/core';
 import { useState } from 'react';
 
 const RelatoriosScreen = () => {
   const [tabValue, setTabValue] = useState(0);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const handleTabChange = (_event: React.SyntheticEvent, newValue: number) => {
     setTabValue(newValue);
+  };
+
+  const handleOpenLogsFolder = () => {
+    invoke('open_logs_folder').catch((e: unknown) => {
+      setErrorMsg(String(e));
+    });
   };
 
   return (
@@ -112,7 +119,7 @@ const RelatoriosScreen = () => {
             <Button
               variant="outlined"
               startIcon={<FolderOpenIcon />}
-              onClick={() => invoke('open_logs_folder').catch((e) => console.error(e))}
+              onClick={handleOpenLogsFolder}
             >
               Abrir pasta de logs
             </Button>
@@ -202,6 +209,11 @@ const RelatoriosScreen = () => {
           </List>
         </>
       )}
+      <Snackbar open={!!errorMsg} autoHideDuration={5000} onClose={() => setErrorMsg(null)}>
+        <Alert severity="error" onClose={() => setErrorMsg(null)}>
+          Não foi possível abrir a pasta de logs: {errorMsg}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 };
