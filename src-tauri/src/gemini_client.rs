@@ -1,6 +1,16 @@
 use serde::Deserialize;
 use std::collections::HashMap;
 
+// ── Audit info ────────────────────────────────────────────────
+
+/// Carries the raw prompt sent to Gemini and the raw text received back so
+/// that callers can persist them to the audit log.
+#[derive(Debug, Clone)]
+pub struct GeminiAuditInfo {
+    pub prompt: String,
+    pub response: String,
+}
+
 // ── Structs ──────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -94,7 +104,7 @@ pub async fn call_gemini(prompt: &str) -> Result<String, String> {
 pub async fn inferir_campos_cte(
     xml: &str,
     campos_faltantes: &[&str],
-) -> Result<HashMap<String, String>, String> {
+) -> Result<(HashMap<String, String>, GeminiAuditInfo), String> {
     let campos_texto = campos_faltantes.join(", ");
     let prompt = format!(
         r#"Você é um assistente especializado em CT-e.
@@ -110,8 +120,12 @@ XML:
         campos_texto, xml
     );
 
-    let resposta = call_gemini(&prompt).await?;
-    let mut resposta = resposta.trim();
+    let resposta_raw = call_gemini(&prompt).await?;
+    let audit = GeminiAuditInfo {
+        prompt: prompt.clone(),
+        response: resposta_raw.clone(),
+    };
+    let mut resposta = resposta_raw.trim();
     if resposta.starts_with("```json") {
         resposta = resposta.trim_start_matches("```json").trim();
     }
@@ -143,12 +157,12 @@ XML:
         result.insert(campo.to_string(), valor);
     }
 
-    Ok(result)
+    Ok((result, audit))
 }
 
 /// Extrai valor de frete em centavos e prazo de entrega de um email de cotação usando Gemini.
-/// Retorna (valor_centavos, prazo_extraido)
-pub async fn extrair_valor_cotacao(assunto: &str, corpo: &str) -> Result<(Option<i32>, Option<String>), String> {
+/// Retorna (valor_centavos, prazo_extraido, audit_info)
+pub async fn extrair_valor_cotacao(assunto: &str, corpo: &str) -> Result<(Option<i32>, Option<String>, GeminiAuditInfo), String> {
     let prompt = format!(
         r#"Você é um assistente especializado em logística de transporte de cargas.
 Analise este email de uma transportadora que está enviando uma cotação/proposta de frete.
@@ -175,8 +189,12 @@ CORPO:
         assunto, corpo
     );
 
-    let resposta = call_gemini(&prompt).await?;
-    let resposta = resposta.trim();
+    let resposta_raw = call_gemini(&prompt).await?;
+    let audit = GeminiAuditInfo {
+        prompt: prompt.clone(),
+        response: resposta_raw.clone(),
+    };
+    let resposta = resposta_raw.trim();
 
     let mut valor: Option<i32> = None;
     let mut prazo: Option<String> = None;
@@ -202,11 +220,11 @@ CORPO:
         }
     }
 
-    Ok((valor, prazo))
+    Ok((valor, prazo, audit))
 }
 
 /// Tenta extrair valor de frete de conteúdo de PDF/texto não-estruturado
-pub async fn extrair_valor_nota_texto(conteudo: &str) -> Result<Option<i32>, String> {
+pub async fn extrair_valor_nota_texto(conteudo: &str) -> Result<(Option<i32>, GeminiAuditInfo), String> {
     let prompt = format!(
         r#"Analise este documento de transporte (CT-e/DACTE) e extraia o valor total do frete.
 Responda SOMENTE com o valor em centavos (inteiro). Ex: R$ 157,72 → 15772.
@@ -217,37 +235,50 @@ CONTEÚDO:
         conteudo
     );
 
-    let resposta = call_gemini(&prompt).await?;
-    let resposta = resposta.trim();
+    let resposta_raw = call_gemini(&prompt).await?;
+    let audit = GeminiAuditInfo {
+        prompt: prompt.clone(),
+        response: resposta_raw.clone(),
+    };
+    let resposta = resposta_raw.trim();
 
     if resposta == "NAO_ENCONTRADO" || resposta.is_empty() {
-        return Ok(None);
+        return Ok((None, audit));
     }
 
     let limpo: String = resposta.chars().filter(|c| c.is_ascii_digit()).collect();
     if limpo.is_empty() {
-        return Ok(None);
+        return Ok((None, audit));
     }
 
-    limpo
+    let result = limpo
         .parse::<i32>()
         .map(Some)
-        .map_err(|_| format!("Gemini retornou valor não numérico: {}", resposta))
+        .map_err(|_| format!("Gemini retornou valor não numérico: {}", resposta))?;
+
+    Ok((result, audit))
 }
 
 /// Identifica a qual orçamento um email se refere. SEMPRE escolhe o melhor match.
+/// Retorna (descrição_escolhida, audit_info).
 pub async fn identificar_orcamento(
     assunto: &str,
     corpo: &str,
     descricoes_disponiveis: &[String],
-) -> Result<Option<String>, String> {
+) -> Result<(Option<String>, GeminiAuditInfo), String> {
     if descricoes_disponiveis.is_empty() {
-        return Ok(None);
+        return Ok((None, GeminiAuditInfo {
+            prompt: "(nenhum orçamento ativo disponível)".to_string(),
+            response: String::new(),
+        }));
     }
 
     // Se só tem 1 orçamento ativo, nem precisa perguntar à IA
     if descricoes_disponiveis.len() == 1 {
-        return Ok(Some(descricoes_disponiveis[0].clone()));
+        return Ok((Some(descricoes_disponiveis[0].clone()), GeminiAuditInfo {
+            prompt: "(identificação direta — apenas 1 orçamento ativo)".to_string(),
+            response: descricoes_disponiveis[0].clone(),
+        }));
     }
 
     let lista = descricoes_disponiveis
@@ -275,8 +306,12 @@ CORPO DO EMAIL:
         lista, assunto, corpo
     );
 
-    let resposta = call_gemini(&prompt).await?;
-    let resposta = resposta.trim();
+    let resposta_raw = call_gemini(&prompt).await?;
+    let audit = GeminiAuditInfo {
+        prompt: prompt.clone(),
+        response: resposta_raw.clone(),
+    };
+    let resposta = resposta_raw.trim();
 
     let index: usize = resposta
         .chars()
@@ -286,10 +321,10 @@ CORPO DO EMAIL:
         .unwrap_or(1); // Default para 1 se não conseguir parsear
 
     if index >= 1 && index <= descricoes_disponiveis.len() {
-        Ok(Some(descricoes_disponiveis[index - 1].clone()))
+        Ok((Some(descricoes_disponiveis[index - 1].clone()), audit))
     } else {
         // Fallback: escolhe o primeiro
-        Ok(Some(descricoes_disponiveis[0].clone()))
+        Ok((Some(descricoes_disponiveis[0].clone()), audit))
     }
 }
 
