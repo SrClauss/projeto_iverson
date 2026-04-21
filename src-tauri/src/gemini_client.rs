@@ -268,16 +268,16 @@ pub async fn identificar_orcamento(
 ) -> Result<(Option<String>, GeminiAuditInfo), String> {
     if descricoes_disponiveis.is_empty() {
         return Ok((None, GeminiAuditInfo {
-            prompt: "(nenhum orçamento ativo disponível)".to_string(),
-            response: String::new(),
+            prompt: "(IA não consultada — nenhum orçamento ativo disponível)".to_string(),
+            response: "(IA não consultada)".to_string(),
         }));
     }
 
     // Se só tem 1 orçamento ativo, nem precisa perguntar à IA
     if descricoes_disponiveis.len() == 1 {
         return Ok((Some(descricoes_disponiveis[0].clone()), GeminiAuditInfo {
-            prompt: "(identificação direta — apenas 1 orçamento ativo)".to_string(),
-            response: descricoes_disponiveis[0].clone(),
+            prompt: "(IA não consultada — apenas 1 orçamento ativo, identificação direta)".to_string(),
+            response: format!("(identificado diretamente: {})", descricoes_disponiveis[0]),
         }));
     }
 
