@@ -1,3 +1,4 @@
+use crate::audit_log;
 use crate::cte_parser;
 use crate::db;
 use crate::gemini_client;
@@ -535,6 +536,12 @@ async fn processar_correcao_divergencia(
     let (email_status, erro_msg) = match update_result {
         Ok(_) => {
             println!("[EmailWatcher] ✅ Correção de divergência registrada para: {}", orcamento_desc);
+            // ── Audit log ──────────────────────────────────────────
+            audit_log::append_audit_log(&orcamento_oid.to_hex(), &format!(
+                "Email de correção de divergência recebido. De: {} | Assunto: {:?}\nConteúdo registrado no orçamento.",
+                from, subject
+            ));
+            // ── Fim audit ───────────────────────────────────────────
             ("aplicado".to_string(), None)
         }
         Err(e) => ("erro".to_string(), Some(format!("Erro ao atualizar orçamento: {}", e))),
@@ -608,12 +615,24 @@ async fn processar_cotacao(
         let (oid, orc) = &orcamentos_ativos[0];
         let desc = campos_orcamento_para_texto(orc);
         println!("[EmailWatcher] Só 1 orçamento ativo, enviando direto: {}", desc);
+        let oid_str = oid.to_hex();
+        audit_log::append_section_separator(&oid_str, "EMAIL DE COTAÇÃO RECEBIDO");
+        audit_log::append_audit_log(&oid_str, &format!(
+            "Email recebido de {} | De: {} | Assunto: {:?}\nOrçamento identificado diretamente (único ativo).",
+            transportadora_nome, from, subject
+        ));
         (Some(*oid), Some(desc))
     } else {
         // Tentar match por atributos do orçamento primeiro
         let match_orcamento = match_orcamento_por_parametros(subject, body, &orcamentos_ativos);
         if let Some((oid, desc)) = match_orcamento {
             println!("[EmailWatcher] Match por parâmetros: {}", desc);
+            let oid_str = oid.to_hex();
+            audit_log::append_section_separator(&oid_str, "EMAIL DE COTAÇÃO RECEBIDO");
+            audit_log::append_audit_log(&oid_str, &format!(
+                "Email recebido de {} | De: {} | Assunto: {:?}\nOrçamento identificado por parâmetros (match direto): {}",
+                transportadora_nome, from, subject, desc
+            ));
             (Some(oid), Some(desc))
         } else {
             let orcamento_infos: Vec<String> = orcamentos_ativos
@@ -622,18 +641,36 @@ async fn processar_cotacao(
                 .collect();
 
             match gemini_client::identificar_orcamento(subject, body, &orcamento_infos).await {
-                Ok(Some(desc_match)) => {
+                Ok((Some(desc_match), identificar_audit)) => {
                     let oid = orcamentos_ativos
                         .iter()
                         .find(|(_, orc)| campos_orcamento_para_texto(orc) == desc_match)
                         .map(|(id, _)| *id);
                     println!("[EmailWatcher] IA escolheu orçamento: {}", desc_match);
+                    if let Some(oid) = oid {
+                        let oid_str = oid.to_hex();
+                        audit_log::append_section_separator(&oid_str, "EMAIL DE COTAÇÃO RECEBIDO");
+                        audit_log::append_audit_log(&oid_str, &format!(
+                            "Email recebido de {} | De: {} | Assunto: {:?}\n\
+                             [AI: Identificação] {} orçamentos ativos avaliados.\n\
+                             Prompt enviado à IA:\n{}\nResposta da IA:\n{}\nOrçamento identificado: {}",
+                            transportadora_nome, from, subject,
+                            orcamentos_ativos.len(),
+                            identificar_audit.prompt, identificar_audit.response, desc_match
+                        ));
+                    }
                     (oid, Some(desc_match))
                 }
-                Ok(None) | Err(_) => {
+                Ok((None, _)) | Err(_) => {
                     let (oid, orc) = &orcamentos_ativos[0];
                     let desc = campos_orcamento_para_texto(orc);
                     println!("[EmailWatcher] Fallback para primeiro orçamento: {}", desc);
+                    let oid_str = oid.to_hex();
+                    audit_log::append_section_separator(&oid_str, "EMAIL DE COTAÇÃO RECEBIDO");
+                    audit_log::append_audit_log(&oid_str, &format!(
+                        "Email recebido de {} | De: {} | Assunto: {:?}\nIdentificação por IA falhou — usando fallback (primeiro orçamento ativo).",
+                        transportadora_nome, from, subject
+                    ));
                     (Some(*oid), Some(desc))
                 }
             }
@@ -642,7 +679,16 @@ async fn processar_cotacao(
 
     // 3. Extrair valor e prazo via Gemini — sempre executa
     let (valor_extraido, prazo_extraido) = match gemini_client::extrair_valor_cotacao(subject, body).await {
-        Ok((v, p)) => (v, p),
+        Ok((v, p, extrair_audit)) => {
+            if let Some(oid) = orcamento_match {
+                let oid_str = oid.to_hex();
+                audit_log::append_audit_log(&oid_str, &format!(
+                    "[AI: Extrair Valor Cotação] Assunto: {:?}\nPrompt enviado à IA:\n{}\nResposta da IA:\n{}\nResultado: valor={:?} centavos, prazo={:?}",
+                    subject, extrair_audit.prompt, extrair_audit.response, v, p
+                ));
+            }
+            (v, p)
+        }
         Err(e) => {
             eprintln!("[EmailWatcher] Erro Gemini cotação: {}", e);
             (None, None)
@@ -669,6 +715,10 @@ async fn processar_cotacao(
                         transportadora_nome,
                         valor as f64 / 100.0
                     );
+                    audit_log::append_audit_log(&orcamento_oid.to_hex(), &format!(
+                        "Proposta automática criada via email. Transportadora: {}, Valor: R$ {:.2}, Prazo: {:?}.",
+                        transportadora_nome, valor as f64 / 100.0, prazo_extraido
+                    ));
                     let notificacao_msg = format!(
                         "Nova proposta recebida de {} para o orçamento {}",
                         transportadora_nome,
@@ -684,11 +734,18 @@ async fn processar_cotacao(
                 }
                 Err(e) => {
                     eprintln!("[EmailWatcher] Erro ao criar proposta: {}", e);
+                    audit_log::append_audit_log(&orcamento_oid.to_hex(), &format!(
+                        "ERRO ao criar proposta automática: {}.", e
+                    ));
                     erro_msg = Some(e);
                 }
             }
         } else {
-            erro_msg = Some("IA não conseguiu extrair valor de frete do email".to_string());
+            let msg_err = "IA não conseguiu extrair valor de frete do email".to_string();
+            audit_log::append_audit_log(&orcamento_oid.to_hex(), &format!(
+                "ERRO: {}.", msg_err
+            ));
+            erro_msg = Some(msg_err);
         }
     }
 
@@ -742,6 +799,7 @@ async fn processar_nota(
     let mut cte_peso_real: Option<f64> = None;
 
     // 2. Tentar parse procedural de cada XML
+    let mut nota_audit_infos: Vec<(String, crate::gemini_client::GeminiAuditInfo)> = Vec::new();
     for (att_id, filename) in &xml_attachments {
         let xml_bytes = match gmail.get_attachment(msg_id, att_id).await {
             Ok(bytes) => bytes,
@@ -768,8 +826,9 @@ async fn processar_nota(
                 );
                 // Fallback: enviar conteúdo ao Gemini
                 let xml_text = String::from_utf8_lossy(&xml_bytes).to_string();
-                if let Ok(Some(v)) = gemini_client::extrair_valor_nota_texto(&xml_text).await {
+                if let Ok((Some(v), audit)) = gemini_client::extrair_valor_nota_texto(&xml_text).await {
                     valor_extraido = Some(v);
+                    nota_audit_infos.push((format!("XML fallback ({})", filename), audit));
                     break;
                 }
             }
@@ -785,8 +844,9 @@ async fn processar_nota(
             .or(msg.snippet.clone())
             .unwrap_or_default();
 
-        if let Ok(Some(v)) = gemini_client::extrair_valor_nota_texto(&body).await {
+        if let Ok((Some(v), audit)) = gemini_client::extrair_valor_nota_texto(&body).await {
             valor_extraido = Some(v);
+            nota_audit_infos.push(("Corpo do email".to_string(), audit));
         }
     }
 
@@ -802,12 +862,27 @@ async fn processar_nota(
                 orcamento_match = Some(oid);
                 orcamento_desc = Some(desc.clone());
                 email_status = "aplicado".to_string();
+                let oid_str = oid.to_hex();
                 println!(
                     "[EmailWatcher] ✅ Nota aplicada automaticamente: {} → R$ {:.2} ({})",
                     transportadora_nome,
                     valor as f64 / 100.0,
                     desc
                 );
+                // ── Audit log ──────────────────────────────────────
+                audit_log::append_section_separator(&oid_str, "EMAIL DE NOTA/CT-e RECEBIDO");
+                audit_log::append_audit_log(&oid_str, &format!(
+                    "Email de nota recebido de {} | De: {} | Assunto: {:?}\nNota aplicada: valor R$ {:.2}.",
+                    transportadora_nome, from, subject,
+                    valor as f64 / 100.0
+                ));
+                for (label, ai) in &nota_audit_infos {
+                    audit_log::append_audit_log(&oid_str, &format!(
+                        "[AI: Extrair Valor Nota — {}]\nPrompt enviado à IA:\n{}\nResposta da IA:\n{}\nValor extraído: {} centavos",
+                        label, ai.prompt, ai.response, valor
+                    ));
+                }
+                // ── Fim audit ───────────────────────────────────────
             }
             Ok(None) => {
                 erro_msg = Some("Nenhum orçamento ativo com ganhadora desta transportadora".to_string());

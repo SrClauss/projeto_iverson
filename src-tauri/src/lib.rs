@@ -18,6 +18,7 @@ mod email_watcher;
 mod gemini_client;
 mod gmail_client;
 mod google_auth;
+mod audit_log;
 
 #[derive(Debug, Serialize)]
 struct GmailInboxStatus {
@@ -1287,17 +1288,61 @@ async fn add_orcamento(mut orcamento: db::models::Orcamento) -> Result<String, S
         }
     }
 
+    // Snapshot for audit log (before the orcamento is moved into insert_one)
+    let descricao_snap = orcamento.descricao.clone();
+    let nota_snap = orcamento.nota.clone();
+    let nc_snap = orcamento.numero_cotacao.clone();
+    let data_snap = orcamento.data_criacao.clone();
+    let cnpj_pag = orcamento.cnpj_pagador.clone();
+    let cnpj_dest = orcamento.cnpj_cpf_destino.clone();
+    let cep_dest = orcamento.cep_destino.clone();
+    let end_dest = orcamento.endereco_destino.clone();
+    let valor_prod = orcamento.valor_produto;
+    let peso_snap = orcamento.peso;
+    let qtd_vol = orcamento.qtd_volumes;
+
     let insert_result = database
         .orcamentos
         .insert_one(orcamento)
         .await
         .map_err(|e| format!("Erro ao salvar orçamento: {}", e))?;
 
-    insert_result
+    let orcamento_id = insert_result
         .inserted_id
         .as_object_id()
         .map(|oid| oid.to_hex())
-        .ok_or_else(|| "Orçamento salvo, mas não foi possível obter o ID".to_string())
+        .ok_or_else(|| "Orçamento salvo, mas não foi possível obter o ID".to_string())?;
+
+    // ── Audit log ───────────────────────────────────────────────
+    audit_log::append_section_separator(&orcamento_id, "CRIAÇÃO DO ORÇAMENTO");
+    audit_log::append_audit_log(&orcamento_id, &format!(
+        "Orçamento criado.\n\
+         Descrição   : {}\n\
+         Nota (NF)   : {}\n\
+         Nº Cotação  : {}\n\
+         Data criação: {}\n\
+         CNPJ pagador: {}\n\
+         CNPJ/CPF dest: {}\n\
+         CEP destino : {}\n\
+         Endereço    : {}\n\
+         Valor produto: R$ {:.2}\n\
+         Peso (kg)   : {:.3}\n\
+         Qtd volumes : {}",
+        descricao_snap,
+        nota_snap.as_deref().unwrap_or("-"),
+        nc_snap.as_deref().unwrap_or("-"),
+        data_snap,
+        cnpj_pag.as_deref().unwrap_or("-"),
+        cnpj_dest.as_deref().unwrap_or("-"),
+        cep_dest.as_deref().unwrap_or("-"),
+        end_dest.as_deref().unwrap_or("-"),
+        valor_prod.unwrap_or(0.0),
+        peso_snap.unwrap_or(0.0),
+        qtd_vol.unwrap_or(0),
+    ));
+    // ── Fim audit ────────────────────────────────────────────────
+
+    Ok(orcamento_id)
 }
 
 #[tauri::command]
@@ -1473,6 +1518,14 @@ async fn update_orcamento_basico(
         return Err("Informe pelo menos o Número de Nota ou Número de Cotação.".to_string());
     }
 
+    // Snapshot values for the audit log before they are moved into the BSON document.
+    let audit_nota = nn.clone();
+    let audit_nc = nc.clone();
+    let audit_cnpj_pag = cnpj_pagador.clone().unwrap_or_default();
+    let audit_cep = cep_destino.clone().unwrap_or_default();
+    let audit_valor_prod = valor_produto;
+    let audit_peso = peso;
+
     let mut set_doc = mongodb::bson::Document::new();
     set_doc.insert("descricao", descricao_final.as_str());
     set_doc.insert("numero_cotacao", numero_cotacao.as_deref());
@@ -1539,10 +1592,23 @@ async fn update_orcamento_basico(
         return Err("Orçamento não encontrado para atualização".to_string());
     }
 
+    // ── Audit log ───────────────────────────────────────────────
+    audit_log::append_audit_log(&orcamento_id, &format!(
+        "Dados básicos atualizados.\n\
+         Nota (NF): {}, Nº Cotação: {}, Data: {}, CNPJ pagador: {}, CEP destino: {}, Valor produto: R$ {:.2}, Peso: {:.3} kg, Qtd volumes: {}",
+        if audit_nota.is_empty() { "-" } else { &audit_nota },
+        if audit_nc.is_empty() { "-" } else { &audit_nc },
+        data_criacao,
+        if audit_cnpj_pag.is_empty() { "-" } else { &audit_cnpj_pag },
+        if audit_cep.is_empty() { "-" } else { &audit_cep },
+        audit_valor_prod.unwrap_or(0.0),
+        audit_peso.unwrap_or(0.0),
+        final_qtd_volumes.unwrap_or(0),
+    ));
+    // ── Fim audit ────────────────────────────────────────────────
+
     Ok("Orçamento atualizado com sucesso".to_string())
 }
-
-#[tauri::command]
 async fn add_proposta_manual(
     orcamento_id: String,
     valor_proposta: f64,
@@ -1595,6 +1661,13 @@ async fn add_proposta_manual(
     if update_result.matched_count == 0 {
         return Err("Orçamento não encontrado para atualização".to_string());
     }
+
+    // ── Audit log ───────────────────────────────────────────────
+    audit_log::append_audit_log(&orcamento_id, &format!(
+        "Proposta manual adicionada. Transportadora ID: {}, Valor: R$ {:.2}, Prazo: {} dias.",
+        transportadora_id, valor_proposta, prazo_entrega
+    ));
+    // ── Fim audit ────────────────────────────────────────────────
 
     Ok("Proposta adicionada com sucesso".to_string())
 }
@@ -1652,6 +1725,13 @@ async fn registrar_nota_manual(
         return Err("Orçamento não encontrado para atualização".to_string());
     }
 
+    // ── Audit log ───────────────────────────────────────────────
+    audit_log::append_audit_log(&orcamento_id, &format!(
+        "Nota registrada manualmente. Proposta ID: {}, Valor frete pago: R$ {:.2}.",
+        proposta_id, valor_frete_pago
+    ));
+    // ── Fim audit ────────────────────────────────────────────────
+
     Ok("Nota registrada manualmente com sucesso".to_string())
 }
 
@@ -1678,6 +1758,10 @@ async fn desativar_orcamento(orcamento_id: String) -> Result<String, String> {
         return Err("Orçamento não encontrado".to_string());
     }
 
+    // ── Audit log ───────────────────────────────────────────────
+    audit_log::append_audit_log(&orcamento_id, "Orçamento desativado.");
+    // ── Fim audit ────────────────────────────────────────────────
+
     Ok("Orçamento desativado com sucesso".to_string())
 }
 
@@ -1699,6 +1783,10 @@ async fn reativar_orcamento(orcamento_id: String) -> Result<String, String> {
     if update_result.matched_count == 0 {
         return Err("Orçamento não encontrado".to_string());
     }
+
+    // ── Audit log ───────────────────────────────────────────────
+    audit_log::append_audit_log(&orcamento_id, "Orçamento reativado.");
+    // ── Fim audit ────────────────────────────────────────────────
 
     Ok("Orçamento reativado com sucesso".to_string())
 }
@@ -1743,6 +1831,13 @@ async fn escolher_proposta_ganhadora(
         return Err("Orçamento não encontrado para atualização".to_string());
     }
 
+    // ── Audit log ───────────────────────────────────────────────
+    audit_log::append_audit_log(&orcamento_id, &format!(
+        "Proposta ganhadora definida. Proposta ID: {}, Valor: R$ {:.2}.",
+        proposta_id, proposta_ganhadora.valor_proposta
+    ));
+    // ── Fim audit ────────────────────────────────────────────────
+
     // Envia e-mail à transportadora vencedora solicitando dados de pagamento e nota fiscal
     if let Some(transportadora_id) = proposta_ganhadora.transportadora_id {
         match database
@@ -1776,7 +1871,13 @@ async fn escolher_proposta_ganhadora(
                             transportadora.nome,
                             orcamento.descricao,
                         );
-                        let _ = gmail.send_email(&email_destino, &subject, &body).await;
+                        let send_result = gmail.send_email(&email_destino, &subject, &body).await;
+                        audit_log::append_audit_log(&orcamento_id, &format!(
+                            "Email de aceite enviado para {} <{}>: {}",
+                            transportadora.nome,
+                            email_destino,
+                            if send_result.is_ok() { "OK" } else { "ERRO ao enviar" }
+                        ));
                     }
                 }
             }
@@ -1814,6 +1915,10 @@ async fn desfazer_proposta_ganhadora(orcamento_id: String) -> Result<String, Str
     if update_result.matched_count == 0 {
         return Err("Orçamento não encontrado para atualização".to_string());
     }
+
+    // ── Audit log ───────────────────────────────────────────────
+    audit_log::append_audit_log(&orcamento_id, "Proposta ganhadora desfeita.");
+    // ── Fim audit ────────────────────────────────────────────────
 
     Ok("Proposta ganhadora desfeita com sucesso".to_string())
 }
@@ -1853,6 +1958,12 @@ async fn delete_proposta(orcamento_id: String, proposta_id: String) -> Result<St
     if update_result.matched_count == 0 {
         return Err("Orçamento não encontrado para atualização".to_string());
     }
+
+    // ── Audit log ───────────────────────────────────────────────
+    audit_log::append_audit_log(&orcamento_id, &format!(
+        "Proposta excluída. Proposta ID: {}.", proposta_id
+    ));
+    // ── Fim audit ────────────────────────────────────────────────
 
     Ok("Proposta excluída com sucesso".to_string())
 }
@@ -2014,6 +2125,7 @@ async fn send_orcamento_request_email(
 
     let gmail = gmail_client::GmailClient::authenticate().await?;
     let mut errors: Vec<String> = Vec::new();
+    let mut enviados: Vec<String> = Vec::new();
 
     for transportadora in transportadoras {
         let to = transportadora.email_orcamento.trim();
@@ -2049,11 +2161,13 @@ async fn send_orcamento_request_email(
 
         if let Err(err) = gmail.send_email(to, &subject, &body).await {
             errors.push(format!("{}: {}", transportadora.nome, err));
+        } else {
+            enviados.push(format!("{} <{}>", transportadora.nome, to));
         }
     }
 
-    if let Some(orcamento_id) = orcamento_id {
-        let orcamento_oid = mongodb::bson::oid::ObjectId::parse_str(&orcamento_id)
+    if let Some(ref orcamento_id) = orcamento_id {
+        let orcamento_oid = mongodb::bson::oid::ObjectId::parse_str(orcamento_id)
             .map_err(|e| format!("ID de orçamento inválido: {}", e))?;
         let ids_bson: Vec<mongodb::bson::Bson> = transportadora_ids
             .iter()
@@ -2074,6 +2188,21 @@ async fn send_orcamento_request_email(
             )
             .await
             .map_err(|e| format!("Erro ao atualizar orcamento com transportadoras enviadas: {}", e))?;
+
+        // ── Audit log ──────────────────────────────────────────────
+        if !enviados.is_empty() {
+            audit_log::append_audit_log(orcamento_id, &format!(
+                "Emails de solicitação de cotação enviados para: {}",
+                enviados.join(", ")
+            ));
+        }
+        if !errors.is_empty() {
+            audit_log::append_audit_log(orcamento_id, &format!(
+                "Erros ao enviar emails: {}",
+                errors.join("; ")
+            ));
+        }
+        // ── Fim audit ───────────────────────────────────────────────
     }
 
     if errors.is_empty() {
@@ -2859,7 +2988,13 @@ async fn comparar_cte_xml(orcamento_id: String, xml_base64: String) -> Result<se
 
     if !missing_fields.is_empty() {
         println!("[comparar_cte_xml] Campos faltantes no XML: {:?}", missing_fields);
-        if let Ok(inferidos) = gemini_client::inferir_campos_cte(&xml_text, &missing_fields).await {
+        if let Ok((inferidos, inferir_audit)) = gemini_client::inferir_campos_cte(&xml_text, &missing_fields).await {
+            // ── Audit log ─────────────────────────────────────────
+            audit_log::append_audit_log(&orcamento_id, &format!(
+                "[AI: Inferir Campos CT-e] Campos faltantes: {:?}\nPrompt:\n{}\nResposta da IA:\n{}\nValores inferidos: {:?}",
+                missing_fields, inferir_audit.prompt, inferir_audit.response, inferidos
+            ));
+            // ── Fim audit ──────────────────────────────────────────
             if let Some(value) = inferidos.get("cidade_destino").filter(|v| !v.trim().is_empty()) {
                 cte.cidade_destino = value.clone();
             }
