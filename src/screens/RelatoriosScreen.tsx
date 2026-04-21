@@ -1,11 +1,20 @@
-import { Box, Typography, List, ListItem, ListItemText, Divider, Tabs, Tab } from '@mui/material';
+import { Box, Typography, List, ListItem, ListItemText, Divider, Tabs, Tab, Button, Snackbar, Alert } from '@mui/material';
+import FolderOpenIcon from '@mui/icons-material/FolderOpen';
+import { invoke } from '@tauri-apps/api/core';
 import { useState } from 'react';
 
 const RelatoriosScreen = () => {
   const [tabValue, setTabValue] = useState(0);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const handleTabChange = (_event: React.SyntheticEvent, newValue: number) => {
     setTabValue(newValue);
+  };
+
+  const handleOpenLogsFolder = () => {
+    invoke('open_logs_folder').catch((e: unknown) => {
+      setErrorMsg(String(e));
+    });
   };
 
   return (
@@ -99,6 +108,22 @@ const RelatoriosScreen = () => {
               <ListItemText primary="• Ajuda a reduzir falsos positivos" secondary="Campos como nome de cidade são comparados de forma mais inteligente, independentemente de maiúsculas ou acentos." />
             </ListItem>
           </List>
+          <Divider sx={{ width: '100%', borderColor: '#e2e8f0' }} />
+          <Box sx={{ mt: 1 }}>
+            <Typography variant="h6" sx={{ fontWeight: 700, color: '#0f172a', mb: 1 }}>
+              Logs do Sistema
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2, maxWidth: 780 }}>
+              Os logs de auditoria registram todas as operações realizadas sobre os orçamentos. Clique abaixo para abrir a pasta onde esses arquivos estão armazenados.
+            </Typography>
+            <Button
+              variant="outlined"
+              startIcon={<FolderOpenIcon />}
+              onClick={handleOpenLogsFolder}
+            >
+              Abrir pasta de logs
+            </Button>
+          </Box>
         </>
       )}
 
@@ -184,6 +209,11 @@ const RelatoriosScreen = () => {
           </List>
         </>
       )}
+      <Snackbar open={!!errorMsg} autoHideDuration={5000} onClose={() => setErrorMsg(null)}>
+        <Alert severity="error" onClose={() => setErrorMsg(null)}>
+          Não foi possível abrir a pasta de logs: {errorMsg}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 };
